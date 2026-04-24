@@ -56,17 +56,38 @@ def download_video_data(url: str) -> dict:
         "subtitles": "",
     }
 
-    # --- 1. Metadaten holen (Caption, Titel) ---
+    # --- 1. Metadaten holen (Caption, Titel) — klappt oft auch ohne Login ---
     result["caption"], result["title"] = _fetch_metadata(url)
 
     # --- 2. Untertitel herunterladen (Auto-Captions = Sprache!) ---
-    result["subtitles"] = _download_subtitles(url, file_id)
+    try:
+        result["subtitles"] = _download_subtitles(url, file_id)
+    except Exception as e:
+        logger.warning(f"Untertitel fehlgeschlagen: {e}")
 
-    # --- 3. Audio herunterladen ---
-    result["audio_path"] = _download_audio(url, file_id)
+    # --- 3. Audio herunterladen (kann bei Instagram fehlschlagen) ---
+    try:
+        result["audio_path"] = _download_audio(url, file_id)
+    except Exception as e:
+        logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
     # --- 4. Video-Frames extrahieren (für Text im Video / OCR) ---
-    result["frames_dir"] = _extract_frames(url, file_id)
+    try:
+        result["frames_dir"] = _extract_frames(url, file_id)
+    except Exception as e:
+        logger.warning(f"Frame-Extraktion fehlgeschlagen: {e}")
+
+    # Mindestens Caption oder Untertitel müssen vorhanden sein
+    has_content = (
+        result["caption"] or result["title"] or
+        result["subtitles"] or result["audio_path"]
+    )
+    if not has_content:
+        raise RuntimeError(
+            "Konnte keine Infos aus dem Video holen. "
+            "Instagram braucht manchmal einen Login — "
+            "versuche den Link nochmal oder nutze ein TikTok-Video."
+        )
 
     return result
 
@@ -80,6 +101,8 @@ def _fetch_metadata(url: str) -> tuple[str, str]:
         "--dump-json",
         "--no-warnings",
         "--quiet",
+        "--no-check-certificates",
+        "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
         url,
     ]
 
