@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: recipe-tool
+    runtime: docker
+    plan: free
+    envVars:
+      - key: MODE
+        value: openrouter
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: NOTE_STYLE
+        value: classic
