@@ -183,7 +183,11 @@ async def extract_recipe_endpoint(request: VideoRequest):
 
         # 5. Rezept extrahieren
         logger.info("Extracting recipe...")
-        recipe = extract_recipe(combined_input, url)
+        try:
+            recipe = extract_recipe(combined_input, url)
+        except Exception as e:
+            logger.error(f"Recipe extraction failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Rezept-Extraktion fehlgeschlagen: {str(e)}")
 
         # 6. Formatieren
         formatted = format_for_apple_notes(recipe)
