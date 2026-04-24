@@ -59,26 +59,29 @@ def download_video_data(url: str, fast_mode: bool = False) -> dict:
     result["caption"] = oembed_caption
     result["title"] = oembed_title
 
+    oembed_has_data = bool(result["caption"] or result["title"])
+
     # --- 2. Falls oEmbed leer: Fallback auf yt-dlp + HTML ---
-    if not result["caption"] and not result["title"]:
+    if not oembed_has_data:
         logger.info("oEmbed leer — versuche yt-dlp/HTML Fallback...")
         result["caption"], result["title"] = _fetch_metadata(url)
 
-    # --- 3. Untertitel herunterladen (Auto-Captions = Sprache!) ---
-    try:
-        result["subtitles"] = _download_subtitles(url, file_id)
-    except Exception as e:
-        logger.warning(f"Untertitel fehlgeschlagen: {e}")
+    # --- 3. Untertitel nur wenn oEmbed leer war (sonst unnötig langsam) ---
+    if not oembed_has_data:
+        try:
+            result["subtitles"] = _download_subtitles(url, file_id)
+        except Exception as e:
+            logger.warning(f"Untertitel fehlgeschlagen: {e}")
 
     # Im Fast-Mode überspringen wir Audio + Frames (spart 30-60 Sekunden)
     if not fast_mode:
-        # --- 4. Audio herunterladen (kann bei Instagram fehlschlagen) ---
+        # --- 4. Audio herunterladen ---
         try:
             result["audio_path"] = _download_audio(url, file_id)
         except Exception as e:
             logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
-        # --- 5. Video-Frames extrahieren (für Text im Video / OCR) ---
+        # --- 5. Video-Frames extrahieren (für OCR) ---
         try:
             result["frames_dir"] = _extract_frames(url, file_id)
         except Exception as e:
@@ -144,7 +147,7 @@ def _resolve_short_url(url: str) -> str:
             "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
             url,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode == 0 and result.stdout.strip():
             resolved = result.stdout.strip().split("?")[0]
             if "tiktok.com" in resolved and "/video/" in resolved:
@@ -227,7 +230,7 @@ def _fetch_metadata_ytdlp(url: str) -> tuple[str, str]:
     logger.info(f"Fetching metadata via yt-dlp: {url}")
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         logger.warning("yt-dlp metadata timed out")
         return "", ""
@@ -320,7 +323,7 @@ def _download_audio(url: str, file_id: str) -> str:
     logger.info(f"Downloading audio from: {url}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Download-Timeout: Video ist zu groß oder Server antwortet nicht.")
 
@@ -362,7 +365,7 @@ def _extract_frames(url: str, file_id: str) -> str | None:
     ]
 
     try:
-        proc = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         logger.warning("Video download for frames timed out")
         return None
@@ -426,7 +429,7 @@ def _download_subtitles(url: str, file_id: str) -> str:
     logger.info(f"Downloading subtitles from: {url}")
 
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         logger.warning("Subtitle download timed out")
         return ""

@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
 
-from downloader import download_video_data
+from downloader import download_video_data, _download_audio
 from extractor import transcribe_audio, extract_recipe, build_extraction_input, check_local_dependencies, MODE
 from ocr import extract_text_from_frames, cleanup_frames
 
@@ -153,18 +153,10 @@ async def extract_recipe_endpoint(request: VideoRequest):
     # ===== PASS 2: Audio-Fallback wenn Caption zu kurz =====
     if not has_enough_caption:
         logger.info("Caption zu kurz — versuche Audio-Download + Transkription...")
+        import uuid
+        file_id = uuid.uuid4().hex[:12]
         try:
-            video_data_full = download_video_data(url, fast_mode=False)
-            # Alte Daten überschreiben
-            if video_data_full["audio_path"]:
-                audio_path = video_data_full["audio_path"]
-            if video_data_full.get("subtitles"):
-                subtitles = video_data_full["subtitles"]
-            if video_data_full.get("caption"):
-                caption = video_data_full["caption"]
-            if video_data_full.get("title") and video_data_full["title"] not in generic_titles:
-                title = video_data_full["title"]
-            frames_dir = video_data_full["frames_dir"]
+            audio_path = _download_audio(url, file_id)
         except Exception as e:
             logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
