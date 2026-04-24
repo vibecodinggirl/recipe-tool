@@ -8,5 +8,7 @@ services:
         value: openrouter
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: GROQ_API_KEY
+        sync: false
       - key: NOTE_STYLE
         value: classic

@@ -87,7 +87,11 @@ def build_extraction_input(transcript: str = "", caption: str = "", ocr_text: st
 def transcribe_audio(audio_path: str) -> str:
     """Transkribiert Audio – lokal, via Groq oder via OpenAI API."""
     if MODE == "openrouter":
-        logger.info("OpenRouter-Modus: Keine Audio-Transkription verfügbar, überspringe.")
+        # Im OpenRouter-Modus: Groq Whisper nutzen wenn Key vorhanden
+        if GROQ_API_KEY:
+            logger.info("OpenRouter-Modus mit Groq Whisper für Transkription")
+            return _transcribe_groq(audio_path)
+        logger.info("OpenRouter-Modus ohne Groq Key: Keine Transkription möglich")
         return ""
     if MODE == "groq":
         return _transcribe_groq(audio_path)

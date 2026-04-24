@@ -122,27 +122,54 @@ async def debug_endpoint(request: VideoRequest):
 @app.post("/extract", response_model=RecipeResponse)
 async def extract_recipe_endpoint(request: VideoRequest):
     """
-    Nimmt eine Video-URL (Instagram Reel oder TikTok).
-    Extrahiert das Rezept aus der Video-Beschreibung (Caption).
+    Zwei-Pass-Extraktion:
+    1. Schnell: Nur Caption/Metadaten holen (fast_mode)
+    2. Falls zu wenig Daten: Audio runterladen + Groq Whisper Transkription
     """
     url = str(request.url)
     logger.info(f"Processing URL: {url}")
 
-    fast_mode = MODE in ("openrouter",)
-
-    # 1. Video-Daten holen
+    # ===== PASS 1: Schnell — nur Caption/Metadaten =====
     try:
-        video_data = download_video_data(url, fast_mode=fast_mode)
+        video_data = download_video_data(url, fast_mode=True)
     except Exception as e:
         logger.error(f"Download failed: {e}")
         raise HTTPException(status_code=400, detail=f"Video konnte nicht geladen werden: {str(e)}")
 
+    caption = video_data.get("caption", "")
+    title = video_data.get("title", "")
+    subtitles = video_data.get("subtitles", "")
     audio_path = video_data["audio_path"]
     frames_dir = video_data["frames_dir"]
-    subtitles = video_data.get("subtitles", "")
+
+    # Prüfen ob Caption genug hergibt
+    total_text = len(caption) + len(subtitles)
+    generic_titles = ("TikTok - Make Your Day", "TikTok", "")
+    title_useful = title not in generic_titles
+
+    has_enough_caption = total_text >= 50 or title_useful
+    logger.info(f"Pass 1: Caption={len(caption)}z, Subs={len(subtitles)}z, Title='{title[:50]}', genug={has_enough_caption}")
+
+    # ===== PASS 2: Audio-Fallback wenn Caption zu kurz =====
+    if not has_enough_caption:
+        logger.info("Caption zu kurz — versuche Audio-Download + Transkription...")
+        try:
+            video_data_full = download_video_data(url, fast_mode=False)
+            # Alte Daten überschreiben
+            if video_data_full["audio_path"]:
+                audio_path = video_data_full["audio_path"]
+            if video_data_full.get("subtitles"):
+                subtitles = video_data_full["subtitles"]
+            if video_data_full.get("caption"):
+                caption = video_data_full["caption"]
+            if video_data_full.get("title") and video_data_full["title"] not in generic_titles:
+                title = video_data_full["title"]
+            frames_dir = video_data_full["frames_dir"]
+        except Exception as e:
+            logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
     try:
-        # 2. Transkript aus Untertiteln oder Audio
+        # Transkription
         transcript = ""
         if subtitles:
             logger.info(f"Nutze Untertitel als Transkript ({len(subtitles)} Zeichen)")
@@ -153,7 +180,7 @@ async def extract_recipe_endpoint(request: VideoRequest):
             except Exception as e:
                 logger.warning(f"Transkription fehlgeschlagen: {e}")
 
-        # 3. OCR auf Video-Frames
+        # OCR
         ocr_text = ""
         if frames_dir:
             try:
@@ -161,21 +188,14 @@ async def extract_recipe_endpoint(request: VideoRequest):
             except Exception as e:
                 logger.warning(f"OCR fehlgeschlagen: {e}")
 
-        # 4. Alle Quellen kombinieren
-        caption = video_data.get("caption", "")
-        title = video_data.get("title", "")
-
         logger.info(f"Quellen: Audio={len(transcript)}z, Caption={len(caption)}z, OCR={len(ocr_text)}z, Titel={len(title)}z")
 
-        # Prüfen ob genug Inhalt da ist
+        # Finaler Check: genug Daten?
         total_content = len(transcript) + len(caption) + len(ocr_text)
-        generic_titles = ("TikTok - Make Your Day", "TikTok", "")
-        title_useful = title not in generic_titles
-
         if total_content < 50 and not title_useful:
             raise HTTPException(
                 status_code=422,
-                detail="Dieses Video hat leider kein Rezept im Text. Funktioniert nur bei Videos wo das Rezept in der Beschreibung steht."
+                detail="Konnte kein Rezept finden — weder in der Beschreibung noch im Audio. Funktioniert am besten bei Videos wo das Rezept im Text steht."
             )
 
         try:
@@ -188,7 +208,7 @@ async def extract_recipe_endpoint(request: VideoRequest):
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-        # 5. Rezept extrahieren
+        # Rezept extrahieren
         logger.info("Extracting recipe...")
         try:
             recipe = extract_recipe(combined_input, url)
@@ -196,7 +216,6 @@ async def extract_recipe_endpoint(request: VideoRequest):
             logger.error(f"Recipe extraction failed: {e}")
             raise HTTPException(status_code=500, detail=f"Rezept-Extraktion fehlgeschlagen: {str(e)}")
 
-        # 6. Formatieren
         formatted = format_for_apple_notes(recipe)
         recipe["formatted_note"] = formatted
 
