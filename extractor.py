@@ -187,48 +187,94 @@ def _extract_ollama(transcript: str) -> str:
     return response.json()["response"]
 
 
+FALLBACK_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "qwen/qwen3-32b:free",
+]
+
+
 def _extract_openrouter(transcript: str) -> str:
-    """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry bei Rate Limit)."""
+    """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry + Fallback-Modelle)."""
     import time
 
-    logger.info(f"Extrahiere Rezept mit OpenRouter ({OPENROUTER_MODEL})...")
+    # Baue Modellliste: Primärmodell zuerst, dann Fallbacks
+    models_to_try = [OPENROUTER_MODEL]
+    for m in FALLBACK_MODELS:
+        if m not in models_to_try:
+            models_to_try.append(m)
 
-    for attempt in range(3):
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": OPENROUTER_MODEL,
-                "messages": [
-                    {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
-                    {"role": "user", "content": transcript},
-                ],
-                "temperature": 0.3,
-                "max_tokens": 2000,
-            },
-            timeout=60.0,
-        )
+    last_error = None
+    for model in models_to_try:
+        logger.info(f"Versuche OpenRouter Modell: {model}")
 
-        if response.status_code == 429:
-            wait = 10 * (attempt + 1)
-            logger.warning(f"Rate limit erreicht, warte {wait}s (Versuch {attempt + 1}/3)...")
-            time.sleep(wait)
-            continue
+        for attempt in range(3):
+            try:
+                response = httpx.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
+                            {"role": "user", "content": transcript},
+                        ],
+                        "temperature": 0.3,
+                        "max_tokens": 2000,
+                    },
+                    timeout=90.0,
+                )
+            except httpx.TimeoutException:
+                logger.warning(f"Timeout bei {model} (Versuch {attempt + 1}/3)")
+                last_error = f"Timeout bei Modell {model}"
+                continue
 
-        response.raise_for_status()
-        data = response.json()
+            logger.info(f"OpenRouter Response: status={response.status_code}")
 
-        # OpenRouter kann auch Fehler im Body zurückgeben
-        if "error" in data:
-            error_msg = data["error"].get("message", str(data["error"]))
-            raise RuntimeError(f"OpenRouter Fehler: {error_msg}")
+            if response.status_code == 429:
+                try:
+                    body = response.json()
+                    logger.warning(f"Rate limit Details: {body}")
+                except Exception:
+                    logger.warning(f"Rate limit Body: {response.text[:200]}")
+                wait = 15 * (attempt + 1)
+                logger.warning(f"Rate limit bei {model}, warte {wait}s (Versuch {attempt + 1}/3)...")
+                time.sleep(wait)
+                last_error = f"Rate limit bei {model}"
+                continue
 
-        return data["choices"][0]["message"]["content"].strip()
+            if response.status_code >= 400:
+                try:
+                    body = response.text[:300]
+                except Exception:
+                    body = "unbekannt"
+                logger.warning(f"HTTP {response.status_code} bei {model}: {body}")
+                last_error = f"HTTP {response.status_code} bei {model}: {body}"
+                break  # Nicht retrybar → nächstes Modell
 
-    raise RuntimeError("OpenRouter Rate Limit — bitte in 1 Minute nochmal versuchen.")
+            data = response.json()
+
+            # OpenRouter kann auch Fehler im Body zurückgeben
+            if "error" in data:
+                error_msg = data["error"].get("message", str(data["error"]))
+                logger.warning(f"OpenRouter Fehler bei {model}: {error_msg}")
+                last_error = f"OpenRouter Fehler bei {model}: {error_msg}"
+                break  # Nächstes Modell versuchen
+
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if content.strip():
+                logger.info(f"Erfolg mit Modell {model} ({len(content)} Zeichen)")
+                return content.strip()
+
+            logger.warning(f"Leere Antwort von {model}")
+            last_error = f"Leere Antwort von {model}"
+            break  # Nächstes Modell
+
+    raise RuntimeError(f"Alle OpenRouter Modelle fehlgeschlagen. Letzter Fehler: {last_error}")
 
 
 def _extract_groq(transcript: str) -> str:
