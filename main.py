@@ -48,6 +48,7 @@ app = FastAPI(
 
 class VideoRequest(BaseModel):
     url: HttpUrl
+    text: str = ""  # Optional: Beschreibungstext vom User (Caption aus App kopiert)
 
 
 class RecipeResponse(BaseModel):
@@ -75,40 +76,33 @@ async def debug_endpoint(request: VideoRequest):
     result = {"url": url, "steps": {}}
 
     try:
-        video_data = download_video_data(url)
+        video_data = download_video_data(url, fast_mode=True)
         result["steps"]["download"] = "ok"
         result["caption_len"] = len(video_data.get("caption", ""))
         result["title"] = video_data.get("title", "")[:100]
-        result["caption_preview"] = video_data.get("caption", "")[:200]
+        result["caption_preview"] = video_data.get("caption", "")[:300]
         result["subtitles_len"] = len(video_data.get("subtitles", ""))
+        result["subtitles_preview"] = video_data.get("subtitles", "")[:200]
         result["has_audio"] = video_data.get("audio_path") is not None
         result["has_frames"] = video_data.get("frames_dir") is not None
     except Exception as e:
         result["steps"]["download"] = f"FEHLER: {str(e)}"
-        return result
 
+    # oEmbed Test
+    import httpx
     try:
-        caption = video_data.get("caption", "")
-        title = video_data.get("title", "")
-        subtitles = video_data.get("subtitles", "")
-        combined = build_extraction_input(
-            transcript=subtitles,
-            caption=caption,
-            ocr_text="",
-            title=title,
-        )
-        result["steps"]["combine"] = "ok"
-        result["combined_len"] = len(combined)
+        if "tiktok.com" in url:
+            oembed_url = f"https://www.tiktok.com/oembed?url={url}"
+        else:
+            oembed_url = f"https://api.instagram.com/oembed/?url={url}"
+        r = httpx.get(oembed_url, timeout=10.0)
+        result["oembed_status"] = r.status_code
+        if r.status_code == 200:
+            data = r.json()
+            result["oembed_title"] = data.get("title", "")[:300]
+            result["oembed_author"] = data.get("author_name", "")
     except Exception as e:
-        result["steps"]["combine"] = f"FEHLER: {str(e)}"
-        return result
-
-    try:
-        recipe = extract_recipe(combined, url)
-        result["steps"]["extract"] = "ok"
-        result["recipe_title"] = recipe.get("title", "")
-    except Exception as e:
-        result["steps"]["extract"] = f"FEHLER: {str(e)}"
+        result["oembed_error"] = str(e)
 
     return result
 
