@@ -88,15 +88,18 @@ async def debug_endpoint(request: VideoRequest):
     except Exception as e:
         result["steps"]["download"] = f"FEHLER: {str(e)}"
 
-    # oEmbed Test
+    # oEmbed Test (mit URL-Auflösung)
     import httpx
     from urllib.parse import quote
+    from downloader import _resolve_short_url
     try:
-        if "tiktok.com" in url:
-            encoded = quote(url, safe="")
+        resolved_url = _resolve_short_url(url)
+        result["resolved_url"] = resolved_url
+        if "tiktok.com" in resolved_url:
+            encoded = quote(resolved_url, safe="")
             oembed_url = f"https://www.tiktok.com/oembed?url={encoded}"
         else:
-            encoded = quote(url, safe="")
+            encoded = quote(resolved_url, safe="")
             oembed_url = f"https://graph.facebook.com/v18.0/instagram_oembed?url={encoded}&omitscript=true"
         r = httpx.get(oembed_url, follow_redirects=True, timeout=10.0,
                       headers={"User-Agent": "Mozilla/5.0"})

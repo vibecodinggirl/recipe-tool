@@ -101,14 +101,58 @@ def download_video_data(url: str, fast_mode: bool = False) -> dict:
     return result
 
 
+def _resolve_short_url(url: str) -> str:
+    """Löst Kurz-URLs (vm.tiktok.com) auf, indem dem Redirect gefolgt wird."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+
+    # Nur vm.tiktok.com Kurz-URLs müssen aufgelöst werden
+    if hostname != "vm.tiktok.com":
+        return url
+
+    logger.info(f"Löse Kurz-URL auf: {url}")
+    try:
+        # HEAD-Request mit Redirect folgen
+        r = httpx.head(url, follow_redirects=True, timeout=10.0,
+                       headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
+        resolved = str(r.url)
+
+        # Nur akzeptieren wenn es eine richtige TikTok-URL ist
+        if "tiktok.com" in resolved and resolved != url:
+            # Query-Parameter entfernen (Tracking-Parameter)
+            clean = resolved.split("?")[0]
+            logger.info(f"Aufgelöst: {url} → {clean}")
+            return clean
+    except Exception as e:
+        logger.warning(f"Kurz-URL Auflösung fehlgeschlagen: {e}")
+
+    # Fallback: GET statt HEAD versuchen
+    try:
+        r = httpx.get(url, follow_redirects=True, timeout=10.0,
+                      headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
+        resolved = str(r.url)
+        if "tiktok.com" in resolved and resolved != url:
+            clean = resolved.split("?")[0]
+            logger.info(f"Aufgelöst (GET): {url} → {clean}")
+            return clean
+    except Exception as e:
+        logger.warning(f"Kurz-URL GET-Fallback fehlgeschlagen: {e}")
+
+    return url
+
+
 def _fetch_oembed(url: str) -> tuple[str, str]:
     """Holt Caption/Titel via oEmbed API (offizielle, öffentliche API — wird nicht blockiert!)."""
     from urllib.parse import quote
 
-    if "tiktok.com" in url:
-        oembed_url = f"https://www.tiktok.com/oembed?url={quote(url, safe='')}"
-    elif "instagram.com" in url:
-        oembed_url = f"https://api.instagram.com/oembed/?url={quote(url, safe='')}&omitscript=true"
+    # Kurz-URLs zuerst auflösen — oEmbed braucht die volle URL!
+    resolved_url = _resolve_short_url(url)
+
+    if "tiktok.com" in resolved_url:
+        oembed_url = f"https://www.tiktok.com/oembed?url={quote(resolved_url, safe='')}"
+    elif "instagram.com" in resolved_url:
+        oembed_url = f"https://api.instagram.com/oembed/?url={quote(resolved_url, safe='')}&omitscript=true"
     else:
         return "", ""
 
