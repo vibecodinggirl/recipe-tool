@@ -90,17 +90,28 @@ async def debug_endpoint(request: VideoRequest):
 
     # oEmbed Test
     import httpx
+    from urllib.parse import quote
     try:
         if "tiktok.com" in url:
-            oembed_url = f"https://www.tiktok.com/oembed?url={url}"
+            encoded = quote(url, safe="")
+            oembed_url = f"https://www.tiktok.com/oembed?url={encoded}"
         else:
-            oembed_url = f"https://api.instagram.com/oembed/?url={url}"
-        r = httpx.get(oembed_url, timeout=10.0)
+            encoded = quote(url, safe="")
+            oembed_url = f"https://graph.facebook.com/v18.0/instagram_oembed?url={encoded}&omitscript=true"
+        r = httpx.get(oembed_url, follow_redirects=True, timeout=10.0,
+                      headers={"User-Agent": "Mozilla/5.0"})
         result["oembed_status"] = r.status_code
+        result["oembed_url"] = oembed_url
         if r.status_code == 200:
-            data = r.json()
-            result["oembed_title"] = data.get("title", "")[:300]
-            result["oembed_author"] = data.get("author_name", "")
+            try:
+                data = r.json()
+                result["oembed_title"] = data.get("title", "")[:300]
+                result["oembed_author"] = data.get("author_name", "")
+                result["oembed_html"] = data.get("html", "")[:200]
+            except Exception:
+                result["oembed_body"] = r.text[:300]
+        else:
+            result["oembed_body"] = r.text[:300]
     except Exception as e:
         result["oembed_error"] = str(e)
 
