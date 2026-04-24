@@ -25,7 +25,7 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")  # tiny, base, small, medium,
 
 # OpenRouter
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 
 # Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
@@ -188,10 +188,11 @@ def _extract_ollama(transcript: str) -> str:
 
 
 FALLBACK_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-3-27b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "qwen/qwen3-32b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openai/gpt-oss-120b:free",
+    "z-ai/glm-4.5-air:free",
+    "minimax/minimax-m2.5:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
 ]
 
 
