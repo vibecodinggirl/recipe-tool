@@ -1,6 +1,6 @@
 """
 Video Downloader - Lädt Audio, Caption, Untertitel und Frames aus Instagram Reels & TikTok Videos.
-Nutzt yt-dlp als Backend.
+Nutzt yt-dlp als Backend, mit HTML-Scraping als Fallback.
 """
 
 import os
@@ -9,6 +9,8 @@ import uuid
 import json
 import subprocess
 import logging
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +95,19 @@ def download_video_data(url: str) -> dict:
 
 
 def _fetch_metadata(url: str) -> tuple[str, str]:
-    """Holt Caption/Beschreibung und Titel des Videos."""
+    """Holt Caption/Beschreibung und Titel des Videos. yt-dlp zuerst, dann HTML-Fallback."""
+    caption, title = _fetch_metadata_ytdlp(url)
+
+    # Fallback: HTML Meta-Tags direkt scrapen
+    if not caption and not title:
+        logger.info("yt-dlp Metadaten leer — versuche HTML-Fallback...")
+        caption, title = _fetch_metadata_html(url)
+
+    return caption, title
+
+
+def _fetch_metadata_ytdlp(url: str) -> tuple[str, str]:
+    """Holt Metadaten via yt-dlp."""
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -106,7 +120,7 @@ def _fetch_metadata(url: str) -> tuple[str, str]:
         url,
     ]
 
-    logger.info(f"Fetching metadata from: {url}")
+    logger.info(f"Fetching metadata via yt-dlp: {url}")
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -128,6 +142,56 @@ def _fetch_metadata(url: str) -> tuple[str, str]:
     title = info.get("title") or info.get("fulltitle") or ""
 
     logger.info(f"Caption ({len(caption)} chars): {caption[:100]}...")
+    return caption, title
+
+
+def _fetch_metadata_html(url: str) -> tuple[str, str]:
+    """
+    Fallback: Holt Caption/Titel aus HTML Meta-Tags (og:description, og:title).
+    Funktioniert auch wenn yt-dlp blockiert wird.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                       "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                       "Version/17.0 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    }
+
+    try:
+        response = httpx.get(url, headers=headers, follow_redirects=True, timeout=30.0)
+        html = response.text
+    except Exception as e:
+        logger.warning(f"HTML fetch failed: {e}")
+        return "", ""
+
+    caption = ""
+    title = ""
+
+    # og:description
+    match = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+    if not match:
+        match = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:description["\']', html, re.IGNORECASE)
+    if match:
+        caption = match.group(1)
+        # HTML entities decodieren
+        caption = caption.replace("&amp;", "&").replace("&#x27;", "'").replace("&quot;", '"').replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
+
+    # og:title
+    match = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+    if not match:
+        match = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:title["\']', html, re.IGNORECASE)
+    if match:
+        title = match.group(1)
+        title = title.replace("&amp;", "&").replace("&#x27;", "'").replace("&quot;", '"').replace("&#39;", "'")
+
+    # Fallback: <title> Tag
+    if not title:
+        match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+        if match:
+            title = match.group(1).strip()
+
+    logger.info(f"HTML Fallback — Caption ({len(caption)} chars), Title ({len(title)} chars)")
     return caption, title
 
 
