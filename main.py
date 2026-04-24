@@ -122,9 +122,12 @@ async def extract_recipe_endpoint(request: VideoRequest):
     url = str(request.url)
     logger.info(f"Processing URL: {url}")
 
+    # Im OpenRouter-Modus: Fast-Mode (nur Metadaten+Untertitel, kein Audio/Video)
+    fast_mode = MODE in ("openrouter",)
+
     # 1. Download audio + metadata + frames
     try:
-        video_data = download_video_data(url)
+        video_data = download_video_data(url, fast_mode=fast_mode)
     except Exception as e:
         logger.error(f"Download failed: {e}")
         raise HTTPException(status_code=400, detail=f"Video konnte nicht heruntergeladen werden: {str(e)}")

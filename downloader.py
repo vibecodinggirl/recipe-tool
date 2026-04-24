@@ -36,14 +36,10 @@ def _validate_url(url: str) -> None:
         )
 
 
-def download_video_data(url: str) -> dict:
+def download_video_data(url: str, fast_mode: bool = False) -> dict:
     """
     Lädt Audio + Metadaten (Caption) aus einem Video.
-    Gibt ein dict zurück mit:
-      - audio_path: Pfad zur Audio-Datei
-      - caption: Beschreibungstext des Videos (Caption)
-      - title: Titel des Videos
-      - frames_dir: Ordner mit extrahierten Frames (für OCR)
+    fast_mode=True: Nur Metadaten + Untertitel (kein Audio/Video-Download → viel schneller)
     """
     _validate_url(url)
 
@@ -67,17 +63,21 @@ def download_video_data(url: str) -> dict:
     except Exception as e:
         logger.warning(f"Untertitel fehlgeschlagen: {e}")
 
-    # --- 3. Audio herunterladen (kann bei Instagram fehlschlagen) ---
-    try:
-        result["audio_path"] = _download_audio(url, file_id)
-    except Exception as e:
-        logger.warning(f"Audio-Download fehlgeschlagen: {e}")
+    # Im Fast-Mode überspringen wir Audio + Frames (spart 30-60 Sekunden)
+    if not fast_mode:
+        # --- 3. Audio herunterladen (kann bei Instagram fehlschlagen) ---
+        try:
+            result["audio_path"] = _download_audio(url, file_id)
+        except Exception as e:
+            logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
-    # --- 4. Video-Frames extrahieren (für Text im Video / OCR) ---
-    try:
-        result["frames_dir"] = _extract_frames(url, file_id)
-    except Exception as e:
-        logger.warning(f"Frame-Extraktion fehlgeschlagen: {e}")
+        # --- 4. Video-Frames extrahieren (für Text im Video / OCR) ---
+        try:
+            result["frames_dir"] = _extract_frames(url, file_id)
+        except Exception as e:
+            logger.warning(f"Frame-Extraktion fehlgeschlagen: {e}")
+    else:
+        logger.info("Fast-Mode: Überspringe Audio + Frame-Download")
 
     # Mindestens Caption oder Untertitel müssen vorhanden sein
     has_content = (
@@ -123,9 +123,9 @@ def _fetch_metadata_ytdlp(url: str) -> tuple[str, str]:
     logger.info(f"Fetching metadata via yt-dlp: {url}")
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
-        logger.warning("Metadata fetch timed out")
+        logger.warning("yt-dlp metadata timed out")
         return "", ""
 
     if proc.returncode != 0:
@@ -322,7 +322,7 @@ def _download_subtitles(url: str, file_id: str) -> str:
     logger.info(f"Downloading subtitles from: {url}")
 
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         logger.warning("Subtitle download timed out")
         return ""
