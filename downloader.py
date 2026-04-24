@@ -102,7 +102,7 @@ def download_video_data(url: str, fast_mode: bool = False) -> dict:
 
 
 def _resolve_short_url(url: str) -> str:
-    """Löst Kurz-URLs (vm.tiktok.com) auf, indem dem Redirect gefolgt wird."""
+    """Löst Kurz-URLs (vm.tiktok.com) auf — per HTTP-Redirect oder yt-dlp."""
     from urllib.parse import urlparse
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
@@ -112,33 +112,48 @@ def _resolve_short_url(url: str) -> str:
         return url
 
     logger.info(f"Löse Kurz-URL auf: {url}")
+
+    # Methode 1: HTTP HEAD/GET mit Redirect
+    for method in ("HEAD", "GET"):
+        try:
+            if method == "HEAD":
+                r = httpx.head(url, follow_redirects=True, timeout=10.0,
+                               headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
+            else:
+                r = httpx.get(url, follow_redirects=True, timeout=10.0,
+                              headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
+            resolved = str(r.url)
+            # Nur akzeptieren wenn es eine echte Video-URL ist (nicht tiktok.com Startseite)
+            if "tiktok.com" in resolved and "/video/" in resolved:
+                clean = resolved.split("?")[0]
+                logger.info(f"Aufgelöst ({method}): {url} → {clean}")
+                return clean
+        except Exception as e:
+            logger.warning(f"Kurz-URL {method} fehlgeschlagen: {e}")
+
+    # Methode 2: yt-dlp --print webpage_url (kann JS-Redirects auflösen)
     try:
-        # HEAD-Request mit Redirect folgen
-        r = httpx.head(url, follow_redirects=True, timeout=10.0,
-                       headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
-        resolved = str(r.url)
-
-        # Nur akzeptieren wenn es eine richtige TikTok-URL ist
-        if "tiktok.com" in resolved and resolved != url:
-            # Query-Parameter entfernen (Tracking-Parameter)
-            clean = resolved.split("?")[0]
-            logger.info(f"Aufgelöst: {url} → {clean}")
-            return clean
+        cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "--skip-download",
+            "--print", "webpage_url",
+            "--no-warnings",
+            "--quiet",
+            "--no-check-certificates",
+            "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+            url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            resolved = result.stdout.strip().split("?")[0]
+            if "tiktok.com" in resolved and "/video/" in resolved:
+                logger.info(f"Aufgelöst (yt-dlp): {url} → {resolved}")
+                return resolved
     except Exception as e:
-        logger.warning(f"Kurz-URL Auflösung fehlgeschlagen: {e}")
+        logger.warning(f"yt-dlp URL-Auflösung fehlgeschlagen: {e}")
 
-    # Fallback: GET statt HEAD versuchen
-    try:
-        r = httpx.get(url, follow_redirects=True, timeout=10.0,
-                      headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
-        resolved = str(r.url)
-        if "tiktok.com" in resolved and resolved != url:
-            clean = resolved.split("?")[0]
-            logger.info(f"Aufgelöst (GET): {url} → {clean}")
-            return clean
-    except Exception as e:
-        logger.warning(f"Kurz-URL GET-Fallback fehlgeschlagen: {e}")
-
+    logger.warning(f"Konnte Kurz-URL nicht auflösen: {url}")
     return url
 
 

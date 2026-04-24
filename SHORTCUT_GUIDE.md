@@ -1,81 +1,122 @@
 # 📱 Apple Shortcut einrichten – Schritt-für-Schritt
 
-Mit diesem Apple Shortcut kannst du direkt aus Instagram oder TikTok ein Rezept extrahieren
-und automatisch in Apple Notizen speichern.
+Rezepte aus TikTok/Instagram automatisch als Apple Note speichern.
+Funktioniert mit Render-Server: `https://recipe-tool-redo.onrender.com`
+
+---
+
+## So funktioniert's
+
+1. **Link teilen** → Rezept wird automatisch aus der Video-Beschreibung extrahiert
+2. **Falls kein Rezept in der Beschreibung** → Shortcut fragt dich: "Kopiere den Rezepttext aus dem Video"
+3. **Du fügst den Text ein** → Das LLM formatiert ihn als perfekte Notiz
+4. **Fertige Notiz in Apple Notes** 🎉
 
 ---
 
 ## Shortcut erstellen
 
-Öffne die **Kurzbefehle-App** auf deinem iPhone/iPad und erstelle einen neuen Kurzbefehl:
+Öffne die **Kurzbefehle-App** auf deinem iPhone und erstelle einen neuen Kurzbefehl:
 
 ### Aktionen (in dieser Reihenfolge):
 
-#### 1. „Eingabe vom Teilen-Menü empfangen"
-- Typ: **URLs**
-- Dies ermöglicht, den Shortcut direkt aus Instagram/TikTok über das Teilen-Menü aufzurufen.
+#### 1. „Zwischenablage abrufen"
+- Kopiere den Video-Link vorher in die Zwischenablage
 
-#### 2. „URL abrufen" (API-Aufruf)
-- URL: `http://DEINE-SERVER-IP:8000/extract`
+#### 2. „Variable festlegen"
+- Name: `videolink`
+- Wert: Zwischenablage
+
+#### 3. „Inhalte von URL abrufen" (1. API-Aufruf)
+- URL: `https://recipe-tool-redo.onrender.com/extract`
 - Methode: **POST**
-- Header:
-  - `Content-Type`: `application/json`
+- Header: `Content-Type` = `application/json`
 - Body (JSON):
   ```json
   {
-    "url": "Kurzbefehlseingabe"
+    "url": "videolink"
   }
   ```
-  (Wähle die Variable „Kurzbefehlseingabe" als Wert für `url`)
-
-#### 3. „Wörterbuch aus Eingabe" (optional – für Fehlerbehandlung)
-- Falls Statuscode ≠ 200: Hinweis anzeigen „Rezept konnte nicht extrahiert werden"
 
 #### 4. „Wert aus Wörterbuch abrufen"
-- Schlüssel: `formatted_note`
+- Schlüssel: `needs_text`
 
-#### 5. „Notiz erstellen" (Apple Notes)
-- Inhalt: Wert aus dem vorherigen Schritt (formatted_note)
-- Ordner: „Rezepte" (erstelle diesen Ordner vorher in Apple Notizen)
+#### 5. „Falls" (Bedingung)
+- Falls `needs_text` **gleich** `1` (oder `true`):
 
-#### 6. „Hinweis anzeigen" (Bestätigung)
-- Text: `✅ Rezept gespeichert!`
+  ##### 5a. „Nach Eingabe fragen"
+  - Frage: `Kein Rezept in der Beschreibung gefunden. Kopiere den Text aus dem Video hier rein:`
+  - Eingabetyp: **Text**
+
+  ##### 5b. „Variable festlegen"
+  - Name: `rezepttext`
+  - Wert: Bereitgestellte Eingabe
+
+  ##### 5c. „Inhalte von URL abrufen" (2. API-Aufruf mit Text)
+  - URL: `https://recipe-tool-redo.onrender.com/extract`
+  - Methode: **POST**
+  - Header: `Content-Type` = `application/json`
+  - Body (JSON):
+    ```json
+    {
+      "url": "videolink",
+      "text": "rezepttext"
+    }
+    ```
+
+  ##### 5d. „Wert aus Wörterbuch abrufen"
+  - Schlüssel: `formatted_note`
+
+  ##### 5e. „Notiz erstellen"
+  - Inhalt: formatted_note
+  - Ordner: Rezepte
+
+  ##### 5f. „Hinweis anzeigen"
+  - `✅ Rezept gespeichert!`
+
+- **Sonst** (Rezept wurde automatisch gefunden):
+
+  ##### 6a. „Inhalte von URL abrufen" ← Ergebnis von Schritt 3 nutzen
+  - „Wert aus Wörterbuch abrufen"
+  - Schlüssel: `formatted_note`
+
+  ##### 6b. „Notiz erstellen"
+  - Inhalt: formatted_note
+  - Ordner: Rezepte
+
+  ##### 6c. „Hinweis anzeigen"
+  - `✅ Rezept gespeichert!`
+
+---
+
+## Vereinfachte Version (ohne automatische Erkennung)
+
+Falls dir der obige Shortcut zu komplex ist — diese Version funktioniert immer:
+
+#### 1. „Nach Eingabe fragen"
+- Frage: „Füge Link oder Rezepttext ein"
+
+#### 2. Prüfen ob es eine URL ist
+- Falls es mit `http` anfängt → als `url` schicken
+- Sonst → als `text` schicken (mit `url` = `https://www.tiktok.com`)
 
 ---
 
 ## So benutzt du es
 
-1. Öffne ein **Instagram Reel** oder **TikTok Video** mit einem Rezept
-2. Tippe auf **Teilen** (Share-Button)
-3. Wähle **„Rezept speichern"** (dein Shortcut-Name)
-4. Warte ein paar Sekunden ⏳
-5. Das Rezept erscheint in **Apple Notizen** im Ordner „Rezepte" 🎉
-
----
-
-## Alternative: Shortcut mit manueller URL-Eingabe
-
-Falls du den Link kopierst statt zu teilen:
-
-#### 1. „Nach Eingabe fragen"
-- Typ: Text
-- Frage: „Füge den Link zum Rezept-Video ein"
-
-#### 2. Dann weiter wie oben ab Schritt 2
+1. Öffne ein **TikTok** oder **Instagram** Video mit einem Rezept
+2. **Kopiere den Link** (Teilen → Link kopieren)
+3. Öffne den **Shortcut** „Rezept speichern"
+4. Warte ein paar Sekunden ⏳ (Render free tier braucht ~30s beim ersten Mal)
+5. Falls Rezept automatisch gefunden → direkt als Note gespeichert ✅
+6. Falls nicht → Text aus Video eingeben → dann als Note gespeichert ✅
 
 ---
 
 ## Tipps
 
-- **Server erreichbar machen**: Der Server muss vom iPhone aus erreichbar sein:
-  - **Zuhause**: Server auf einem Mac/PC im gleichen WLAN starten → lokale IP verwenden
-  - **Unterwegs**: Server auf einem VPS hosten oder einen Tunnel (z.B. Tailscale, ngrok) nutzen
-
-- **Schnelltipp ngrok**: Für schnelles Testen:
-  ```bash
-  ngrok http 8000
-  ```
-  Dann die ngrok-URL im Shortcut verwenden.
-
-- **Siri**: Du kannst den Shortcut auch per Siri aufrufen:
-  „Hey Siri, Rezept speichern"
+- **Erster Aufruf langsam**: Render free tier schläft nach 15min ein — erster Aufruf braucht ~30-60s
+- **TikTok funktioniert besser als Instagram** für die automatische Erkennung
+- **Videos MIT Rezept in der Beschreibung** werden voll-automatisch extrahiert
+- **Videos OHNE Text** → du wirst gefragt und kannst den Text manuell einfügen
+- **Siri**: Du kannst den Shortcut auch per Siri aufrufen: „Hey Siri, Rezept speichern"

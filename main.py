@@ -48,7 +48,7 @@ app = FastAPI(
 
 class VideoRequest(BaseModel):
     url: HttpUrl
-    text: str = ""  # Optional: Beschreibungstext vom User (Caption aus App kopiert)
+    text: str = ""  # Optional: Rezepttext vom User (manuell aus Video kopiert)
 
 
 class RecipeResponse(BaseModel):
@@ -59,6 +59,7 @@ class RecipeResponse(BaseModel):
     tips: str
     source_url: str
     formatted_note: str
+    needs_text: bool = False  # True = kein Rezept gefunden, User soll Text liefern
 
 
 @app.get("/health")
@@ -121,59 +122,105 @@ async def debug_endpoint(request: VideoRequest):
     return result
 
 
-@app.post("/extract", response_model=RecipeResponse)
+@app.post("/extract")
 async def extract_recipe_endpoint(request: VideoRequest):
     """
-    Nimmt eine Video-URL (Instagram Reel oder TikTok),
-    nutzt ALLE verfügbaren Quellen: Audio, Caption, Text im Video (OCR).
+    Hybrid-Modus:
+    1. Versucht Rezept automatisch aus Video-Caption zu holen
+    2. Wenn Caption leer/zu kurz → gibt needs_text=true zurück
+    3. User kann mit text-Feld den Text manuell nachliefern
     """
     url = str(request.url)
-    logger.info(f"Processing URL: {url}")
+    user_text = request.text.strip()
+    logger.info(f"Processing URL: {url}, user_text={len(user_text)}z")
 
-    # Im OpenRouter-Modus: Fast-Mode (nur Metadaten+Untertitel, kein Audio/Video)
+    # ============================================================
+    # FALL A: User hat Text mitgeliefert → direkt extrahieren
+    # ============================================================
+    if user_text:
+        logger.info("User hat Text geliefert — extrahiere direkt")
+        try:
+            combined_input = build_extraction_input(
+                caption=user_text,
+                title="Vom User kopierter Text",
+            )
+            recipe = extract_recipe(combined_input, url)
+            formatted = format_for_apple_notes(recipe)
+            recipe["formatted_note"] = formatted
+            recipe["needs_text"] = False
+            return JSONResponse(content=recipe)
+        except Exception as e:
+            logger.error(f"Extraktion aus User-Text fehlgeschlagen: {e}")
+            raise HTTPException(status_code=500, detail=f"Rezept-Extraktion fehlgeschlagen: {str(e)}")
+
+    # ============================================================
+    # FALL B: Kein Text → automatisch aus Video versuchen
+    # ============================================================
     fast_mode = MODE in ("openrouter",)
 
-    # 1. Download audio + metadata + frames
     try:
         video_data = download_video_data(url, fast_mode=fast_mode)
     except Exception as e:
         logger.error(f"Download failed: {e}")
-        raise HTTPException(status_code=400, detail=f"Video konnte nicht heruntergeladen werden: {str(e)}")
+        # Download gescheitert → User soll Text liefern
+        return JSONResponse(content={
+            "needs_text": True,
+            "message": "Video konnte nicht geladen werden. Kopiere das Rezept aus dem Video und versuche es nochmal.",
+            "title": "", "servings": "", "ingredients": [], "steps": [],
+            "tips": "", "source_url": url, "formatted_note": "",
+        })
 
     audio_path = video_data["audio_path"]
     frames_dir = video_data["frames_dir"]
     subtitles = video_data.get("subtitles", "")
 
     try:
-        # 2. Audio transkribieren ODER Untertitel nutzen
+        # Audio/Untertitel
         transcript = ""
         if subtitles:
-            # Untertitel gefunden — das ist die Sprache als Text, kostenlos!
             logger.info(f"Nutze Untertitel als Transkript ({len(subtitles)} Zeichen)")
             transcript = subtitles
         elif audio_path:
-            # Kein Untertitel → Whisper-Transkription versuchen
-            logger.info("Keine Untertitel — versuche Audio-Transkription...")
             try:
                 transcript = transcribe_audio(audio_path)
             except Exception as e:
                 logger.warning(f"Transkription fehlgeschlagen: {e}")
 
-        # 3. OCR auf Video-Frames
+        # OCR
         ocr_text = ""
         if frames_dir:
-            logger.info("Running OCR on frames...")
             try:
                 ocr_text = extract_text_from_frames(frames_dir)
             except Exception as e:
                 logger.warning(f"OCR fehlgeschlagen: {e}")
 
-        # 4. Alle Quellen kombinieren
+        # Alle Quellen kombinieren
         caption = video_data.get("caption", "")
         title = video_data.get("title", "")
 
         logger.info(f"Quellen: Audio={len(transcript)}z, Caption={len(caption)}z, OCR={len(ocr_text)}z, Titel={len(title)}z")
 
+        # Prüfen ob genug Inhalt da ist
+        total_content = len(transcript) + len(caption) + len(ocr_text)
+        # Generische Titel ignorieren
+        if title in ("TikTok - Make Your Day", "TikTok", ""):
+            title_useful = False
+        else:
+            title_useful = True
+
+        if total_content < 50 and not title_useful:
+            # ============================================================
+            # ZU WENIG DATEN → User soll Text liefern
+            # ============================================================
+            logger.info(f"Zu wenig Daten ({total_content} Zeichen) — frage User nach Text")
+            return JSONResponse(content={
+                "needs_text": True,
+                "message": "Das Video hat kein geschriebenes Rezept in der Beschreibung. Kopiere die Zutaten/Schritte aus dem Video und versuche es nochmal.",
+                "title": "", "servings": "", "ingredients": [], "steps": [],
+                "tips": "", "source_url": url, "formatted_note": "",
+            })
+
+        # Genug Daten → extrahieren
         try:
             combined_input = build_extraction_input(
                 transcript=transcript,
@@ -182,9 +229,13 @@ async def extract_recipe_endpoint(request: VideoRequest):
                 title=title,
             )
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+            return JSONResponse(content={
+                "needs_text": True,
+                "message": str(e),
+                "title": "", "servings": "", "ingredients": [], "steps": [],
+                "tips": "", "source_url": url, "formatted_note": "",
+            })
 
-        # 5. Rezept extrahieren
         logger.info("Extracting recipe...")
         try:
             recipe = extract_recipe(combined_input, url)
@@ -192,14 +243,12 @@ async def extract_recipe_endpoint(request: VideoRequest):
             logger.error(f"Recipe extraction failed: {e}")
             raise HTTPException(status_code=500, detail=f"Rezept-Extraktion fehlgeschlagen: {str(e)}")
 
-        # 6. Formatieren
         formatted = format_for_apple_notes(recipe)
         recipe["formatted_note"] = formatted
-
-        return RecipeResponse(**recipe)
+        recipe["needs_text"] = False
+        return JSONResponse(content=recipe)
 
     finally:
-        # Cleanup
         if audio_path and os.path.exists(audio_path):
             os.remove(audio_path)
         cleanup_frames(frames_dir)
