@@ -68,6 +68,51 @@ async def health():
     return info
 
 
+@app.post("/debug")
+async def debug_endpoint(request: VideoRequest):
+    """Debug: zeigt was bei jedem Schritt passiert."""
+    url = str(request.url)
+    result = {"url": url, "steps": {}}
+
+    try:
+        video_data = download_video_data(url)
+        result["steps"]["download"] = "ok"
+        result["caption_len"] = len(video_data.get("caption", ""))
+        result["title"] = video_data.get("title", "")[:100]
+        result["caption_preview"] = video_data.get("caption", "")[:200]
+        result["subtitles_len"] = len(video_data.get("subtitles", ""))
+        result["has_audio"] = video_data.get("audio_path") is not None
+        result["has_frames"] = video_data.get("frames_dir") is not None
+    except Exception as e:
+        result["steps"]["download"] = f"FEHLER: {str(e)}"
+        return result
+
+    try:
+        caption = video_data.get("caption", "")
+        title = video_data.get("title", "")
+        subtitles = video_data.get("subtitles", "")
+        combined = build_extraction_input(
+            transcript=subtitles,
+            caption=caption,
+            ocr_text="",
+            title=title,
+        )
+        result["steps"]["combine"] = "ok"
+        result["combined_len"] = len(combined)
+    except Exception as e:
+        result["steps"]["combine"] = f"FEHLER: {str(e)}"
+        return result
+
+    try:
+        recipe = extract_recipe(combined, url)
+        result["steps"]["extract"] = "ok"
+        result["recipe_title"] = recipe.get("title", "")
+    except Exception as e:
+        result["steps"]["extract"] = f"FEHLER: {str(e)}"
+
+    return result
+
+
 @app.post("/extract", response_model=RecipeResponse)
 async def extract_recipe_endpoint(request: VideoRequest):
     """
