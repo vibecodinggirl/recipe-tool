@@ -54,10 +54,17 @@ def download_video_data(url: str, fast_mode: bool = False) -> dict:
         "subtitles": "",
     }
 
-    # --- 1. Metadaten holen (Caption, Titel) — klappt oft auch ohne Login ---
-    result["caption"], result["title"] = _fetch_metadata(url)
+    # --- 1. oEmbed API (schnell & zuverlässig, wird nicht blockiert!) ---
+    oembed_caption, oembed_title = _fetch_oembed(url)
+    result["caption"] = oembed_caption
+    result["title"] = oembed_title
 
-    # --- 2. Untertitel herunterladen (Auto-Captions = Sprache!) ---
+    # --- 2. Falls oEmbed leer: Fallback auf yt-dlp + HTML ---
+    if not result["caption"] and not result["title"]:
+        logger.info("oEmbed leer — versuche yt-dlp/HTML Fallback...")
+        result["caption"], result["title"] = _fetch_metadata(url)
+
+    # --- 3. Untertitel herunterladen (Auto-Captions = Sprache!) ---
     try:
         result["subtitles"] = _download_subtitles(url, file_id)
     except Exception as e:
@@ -65,13 +72,13 @@ def download_video_data(url: str, fast_mode: bool = False) -> dict:
 
     # Im Fast-Mode überspringen wir Audio + Frames (spart 30-60 Sekunden)
     if not fast_mode:
-        # --- 3. Audio herunterladen (kann bei Instagram fehlschlagen) ---
+        # --- 4. Audio herunterladen (kann bei Instagram fehlschlagen) ---
         try:
             result["audio_path"] = _download_audio(url, file_id)
         except Exception as e:
             logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
-        # --- 4. Video-Frames extrahieren (für Text im Video / OCR) ---
+        # --- 5. Video-Frames extrahieren (für Text im Video / OCR) ---
         try:
             result["frames_dir"] = _extract_frames(url, file_id)
         except Exception as e:
@@ -92,6 +99,44 @@ def download_video_data(url: str, fast_mode: bool = False) -> dict:
         )
 
     return result
+
+
+def _fetch_oembed(url: str) -> tuple[str, str]:
+    """Holt Caption/Titel via oEmbed API (offizielle, öffentliche API — wird nicht blockiert!)."""
+    from urllib.parse import quote
+
+    if "tiktok.com" in url:
+        oembed_url = f"https://www.tiktok.com/oembed?url={quote(url, safe='')}"
+    elif "instagram.com" in url:
+        oembed_url = f"https://api.instagram.com/oembed/?url={quote(url, safe='')}&omitscript=true"
+    else:
+        return "", ""
+
+    logger.info(f"Fetching oEmbed: {oembed_url}")
+
+    try:
+        r = httpx.get(oembed_url, follow_redirects=True, timeout=10.0,
+                      headers={"User-Agent": "Mozilla/5.0"})
+    except Exception as e:
+        logger.warning(f"oEmbed request failed: {e}")
+        return "", ""
+
+    if r.status_code != 200:
+        logger.warning(f"oEmbed returned {r.status_code}")
+        return "", ""
+
+    try:
+        data = r.json()
+    except Exception:
+        logger.warning("oEmbed response is not JSON")
+        return "", ""
+
+    caption = data.get("title", "")
+    author = data.get("author_name", "")
+    title = f"{caption[:80]} — @{author}" if author else caption[:80]
+
+    logger.info(f"oEmbed: Caption ({len(caption)} chars), Author: {author}")
+    return caption, title
 
 
 def _fetch_metadata(url: str) -> tuple[str, str]:
