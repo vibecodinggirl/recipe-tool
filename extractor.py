@@ -188,28 +188,47 @@ def _extract_ollama(transcript: str) -> str:
 
 
 def _extract_openrouter(transcript: str) -> str:
-    """Extrahiert Rezept mit OpenRouter API (kostenlos)."""
+    """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry bei Rate Limit)."""
+    import time
+
     logger.info(f"Extrahiere Rezept mit OpenRouter ({OPENROUTER_MODEL})...")
 
-    response = httpx.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": OPENROUTER_MODEL,
-            "messages": [
-                {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 2000,
-        },
-        timeout=60.0,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"].strip()
+    for attempt in range(3):
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
+                    {"role": "user", "content": transcript},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 2000,
+            },
+            timeout=60.0,
+        )
+
+        if response.status_code == 429:
+            wait = 10 * (attempt + 1)
+            logger.warning(f"Rate limit erreicht, warte {wait}s (Versuch {attempt + 1}/3)...")
+            time.sleep(wait)
+            continue
+
+        response.raise_for_status()
+        data = response.json()
+
+        # OpenRouter kann auch Fehler im Body zurückgeben
+        if "error" in data:
+            error_msg = data["error"].get("message", str(data["error"]))
+            raise RuntimeError(f"OpenRouter Fehler: {error_msg}")
+
+        return data["choices"][0]["message"]["content"].strip()
+
+    raise RuntimeError("OpenRouter Rate Limit — bitte in 1 Minute nochmal versuchen.")
 
 
 def _extract_groq(transcript: str) -> str:
