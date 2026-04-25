@@ -166,209 +166,378 @@ So machst du den Kurzbefehl im Share Sheet verfügbar:
 
 ## 🛒 Shortcut: Einkaufsliste erstellen
 
-Erstellt aus einem gerade gespeicherten Rezept eine kategorisierte Einkaufsliste.
+Erstellt aus einem Rezept-Video eine kategorisierte Einkaufsliste (nach Supermarkt-Abteilung sortiert).
 
-**Neuen Kurzbefehl erstellen** → Name: „Einkaufsliste"
+**Kurzbefehle-App öffnen → + (oben rechts) → neuer Kurzbefehl → Name: „Einkaufsliste"**
 
-#### 1. „URLs von Share Sheet erhalten"
-- Wenn es keine Eingabe gibt: fortfahren
+### Share Sheet aktivieren:
+1. Tippe oben auf den **Namen** „Einkaufsliste"
+2. Aktiviere **„Im Share Sheet anzeigen"**
+3. Bei **Eingabetypen**: wähle **URLs**
+4. Tippe auf **Fertig**
 
-#### 2. „Inhalte von URL abrufen" (Wake)
+### Aktionen hinzufügen:
+
+#### Aktion 1: „Inhalte von URL abrufen"
+- Suche nach: **Inhalte von URL** → hinzufügen
 - URL: `https://recipe-tool-redo.onrender.com/wake`
+- Tippe auf das blaue **„Pfeil"**-Symbol rechts
 - Methode: **GET**
 
-#### 3. „Inhalte von URL abrufen" (Rezept holen)
+#### Aktion 2: „Inhalte von URL abrufen"
+- Nochmal **Inhalte von URL** hinzufügen
 - URL: `https://recipe-tool-redo.onrender.com/extract`
+- Tippe auf das blaue **„Pfeil"**-Symbol rechts
 - Methode: **POST**
-- Header: `Content-Type` = `application/json`
-- Body: `{"url": "Kurzbefehl-Eingabe"}`
+- Tippe auf **„Header hinzufügen"**:
+  - Schlüssel: `Content-Type`
+  - Wert: `application/json`
+- Anforderungsinhalt: **JSON**
+- Tippe auf **„Neues Feld hinzufügen"** → **Text**
+  - Schlüssel: `url`
+  - Wert: Tippe drauf → wähle **„Kurzbefehl-Eingabe"** (lila Blase)
 
-#### 4. „Wert aus Wörterbuch abrufen"
+#### Aktion 3: „Wert aus Wörterbuch abrufen"
+- Suche nach: **Wörterbuch** → „Wert aus Wörterbuch abrufen" hinzufügen
 - Schlüssel: `ingredients`
-- Variable setzen → Name: `zutaten`
+- „in": sollte automatisch „Inhalte von URL" sein (die Ausgabe von Aktion 2)
 
-#### 5. „Wert aus Wörterbuch abrufen"
+#### Aktion 4: „Variable setzen"
+- Suche nach: **Variable** → „Variable setzen" hinzufügen
+- Name: `zutaten`
+- Eingabe: **Wörterbuch-Wert** (Ausgabe von Aktion 3)
+
+#### Aktion 5: „Wert aus Wörterbuch abrufen"
+- Nochmal hinzufügen
 - Schlüssel: `title`
-- Variable setzen → Name: `titel`
+- „in": Tippe drauf → wähle **„Inhalte von URL"** (Ausgabe von Aktion 2, NICHT von Aktion 1!)
 
-#### 6. „Inhalte von URL abrufen" (Einkaufsliste)
+#### Aktion 6: „Variable setzen"
+- Name: `titel`
+- Eingabe: **Wörterbuch-Wert** (Ausgabe von Aktion 5)
+
+#### Aktion 7: „Inhalte von URL abrufen"
 - URL: `https://recipe-tool-redo.onrender.com/shopping-list`
 - Methode: **POST**
 - Header: `Content-Type` = `application/json`
-- Body:
-  ```json
-  {
-    "ingredients": zutaten,
-    "title": titel
-  }
-  ```
+- Anforderungsinhalt: **JSON**
+- **„Neues Feld hinzufügen"** → **Text**:
+  - Schlüssel: `title`
+  - Wert: Tippe drauf → **Variable wählen** → `titel`
+- **„Neues Feld hinzufügen"** → **Array**:
+  - Schlüssel: `ingredients`
+  - Wert: Tippe drauf → **Variable wählen** → `zutaten`
 
-#### 7. „Wert aus Wörterbuch abrufen"
+#### Aktion 8: „Wert aus Wörterbuch abrufen"
 - Schlüssel: `formatted_list`
 
-#### 8. „Neue Erinnerung hinzufügen" (oder „Notiz erstellen")
-- Inhalt: Wörterbuch-Wert
-- Liste/Ordner: Einkaufsliste
+#### Aktion 9: „Notiz erstellen"
+- Suche nach: **Notiz** → „Notiz erstellen" hinzufügen
+- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 8)
+- Ordner: **Einkaufslisten** (erstelle diesen Ordner vorher in der Notizen-App)
 
-#### 9. „Hinweis anzeigen"
-- `🛒 Einkaufsliste erstellt!`
+#### Aktion 10: „Hinweis anzeigen"
+- Suche nach: **Hinweis** → hinzufügen
+- Text: `🛒 Einkaufsliste erstellt!`
 
 ---
 
 ## 🔢 Shortcut: Portionen umrechnen
 
-Rechnet ein Rezept auf eine andere Personenzahl um.
+Rechnet ein Rezept auf eine andere Personenzahl um und speichert die neue Version.
 
-**Neuen Kurzbefehl erstellen** → Name: „Portionen umrechnen"
+**Kurzbefehle-App öffnen → + → neuer Kurzbefehl → Name: „Portionen umrechnen"**
 
-#### 1. „URLs von Share Sheet erhalten"
+### Share Sheet aktivieren:
+- **„Im Share Sheet anzeigen"** aktivieren
+- Eingabetypen: **URLs**
 
-#### 2. „Inhalte von URL abrufen" (Wake + Extract wie oben)
-- Wake → Extract → Ergebnis holen
+### Aktionen hinzufügen:
 
-#### 3. Variablen aus Ergebnis setzen
-- `title`, `servings`, `ingredients`, `steps` aus dem Wörterbuch holen
+#### Aktion 1: „Inhalte von URL abrufen" (Wake)
+- URL: `https://recipe-tool-redo.onrender.com/wake`
+- Methode: **GET**
 
-#### 4. „Nach Eingabe fragen"
+#### Aktion 2: „Inhalte von URL abrufen" (Rezept holen)
+- URL: `https://recipe-tool-redo.onrender.com/extract`
+- Methode: **POST**
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- Neues Feld → **Text**: Schlüssel `url`, Wert: **Kurzbefehl-Eingabe**
+
+#### Aktion 3: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `title` → Variable setzen: `title`
+
+#### Aktion 4: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `servings`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 2)
+- → Variable setzen: `servings`
+
+#### Aktion 5: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `ingredients`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 2)
+- → Variable setzen: `ingredients`
+
+#### Aktion 6: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `steps`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 2)
+- → Variable setzen: `steps`
+
+#### Aktion 7: „Nach Eingabe fragen"
+- Suche nach: **Eingabe** → „Nach Eingabe fragen" hinzufügen
 - Frage: `Für wie viele Personen? (z.B. "8 Portionen")`
 - Eingabetyp: **Text**
-- Variable: `zielportionen`
 
-#### 5. „Inhalte von URL abrufen"
+#### Aktion 8: „Variable setzen"
+- Name: `zielportionen`
+- Eingabe: **Bereitgestellte Eingabe** (Ausgabe von Aktion 7)
+
+#### Aktion 9: „Inhalte von URL abrufen"
 - URL: `https://recipe-tool-redo.onrender.com/scale`
 - Methode: **POST**
 - Header: `Content-Type` = `application/json`
-- Body:
-  ```json
-  {
-    "title": title,
-    "servings": servings,
-    "ingredients": ingredients,
-    "steps": steps,
-    "target_servings": zielportionen
-  }
+- Anforderungsinhalt: **JSON**
+- **Neues Feld** → **Text**: Schlüssel `title`, Wert: Variable `title`
+- **Neues Feld** → **Text**: Schlüssel `servings`, Wert: Variable `servings`
+- **Neues Feld** → **Array**: Schlüssel `ingredients`, Wert: Variable `ingredients`
+- **Neues Feld** → **Array**: Schlüssel `steps`, Wert: Variable `steps`
+- **Neues Feld** → **Text**: Schlüssel `target_servings`, Wert: Variable `zielportionen`
+
+#### Aktion 10: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `title`
+- → Variable setzen: `neuer_titel`
+
+#### Aktion 11: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `ingredients`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 9)
+- → Variable setzen: `neue_zutaten`
+
+#### Aktion 12: „Text"
+- Suche nach: **Text** → hinzufügen
+- Schreibe folgenden Text (tippe auf Variablen um sie einzufügen):
+  ```
+  🍳 neuer_titel
+
+  📝 Zutaten:
+  neue_zutaten
+
+  ✅ Umgerechnet auf: zielportionen
   ```
 
-#### 6. Ergebnis als Notiz speichern
-- `title`, `servings`, `ingredients`, `steps` aus Antwort holen
-- Als Notiz formatieren und in Apple Notes speichern
+#### Aktion 13: „Notiz erstellen"
+- Inhalt: **Text** (Ausgabe von Aktion 12)
+- Ordner: **Rezepte**
 
-#### 7. „Hinweis anzeigen"
-- `✅ Rezept umgerechnet!`
+#### Aktion 14: „Hinweis anzeigen"
+- Text: `✅ Rezept umgerechnet!`
 
 ---
 
 ## 📊 Shortcut: Nährwerte anzeigen
 
-Zeigt geschätzte Kalorien und Makros pro Portion.
+Zeigt geschätzte Kalorien und Makros pro Portion an — ohne etwas zu speichern.
 
-**Neuen Kurzbefehl erstellen** → Name: „Nährwerte"
+**Kurzbefehle-App → + → Name: „Nährwerte"**
 
-#### 1. „URLs von Share Sheet erhalten"
+### Share Sheet aktivieren:
+- **„Im Share Sheet anzeigen"** aktivieren
+- Eingabetypen: **URLs**
 
-#### 2. Wake + Extract (wie oben)
+### Aktionen hinzufügen:
 
-#### 3. Variablen setzen: `title`, `ingredients`, `servings`
+#### Aktion 1: „Inhalte von URL abrufen" (Wake)
+- URL: `https://recipe-tool-redo.onrender.com/wake`
+- Methode: **GET**
 
-#### 4. „Inhalte von URL abrufen"
+#### Aktion 2: „Inhalte von URL abrufen" (Rezept holen)
+- URL: `https://recipe-tool-redo.onrender.com/extract`
+- Methode: **POST**
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- Neues Feld → **Text**: Schlüssel `url`, Wert: **Kurzbefehl-Eingabe**
+
+#### Aktion 3: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `title` → Variable setzen: `title`
+
+#### Aktion 4: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `ingredients`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 2)
+- → Variable setzen: `ingredients`
+
+#### Aktion 5: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `servings`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 2)
+- → Variable setzen: `servings`
+
+#### Aktion 6: „Inhalte von URL abrufen" (Nährwerte)
 - URL: `https://recipe-tool-redo.onrender.com/nutrition`
 - Methode: **POST**
-- Body:
-  ```json
-  {
-    "title": title,
-    "ingredients": ingredients,
-    "servings": servings
-  }
-  ```
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- **Neues Feld** → **Text**: Schlüssel `title`, Wert: Variable `title`
+- **Neues Feld** → **Array**: Schlüssel `ingredients`, Wert: Variable `ingredients`
+- **Neues Feld** → **Text**: Schlüssel `servings`, Wert: Variable `servings`
 
-#### 5. „Wert aus Wörterbuch abrufen"
+#### Aktion 7: „Wert aus Wörterbuch abrufen"
 - Schlüssel: `formatted`
 
-#### 6. „Hinweis anzeigen"
-- Inhalt: Wörterbuch-Wert (zeigt Kalorien, Protein, etc.)
+#### Aktion 8: „Hinweis anzeigen"
+- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 7)
+- → Zeigt ein Popup mit Kalorien, Protein, Kohlenhydrate, Fett, Ballaststoffe
 
 ---
 
 ## 🏷️ Shortcut: Rezept mit Tags speichern
 
-Speichert das Rezept UND zeigt automatisch Tags (Vegan, Schnell, etc.).
+Speichert das Rezept als Notiz UND zeigt automatisch erkannte Tags (Vegan, Schnell, Italienisch, etc.).
 
-**Neuen Kurzbefehl erstellen** → Name: „Rezept + Tags"
+**Kurzbefehle-App → + → Name: „Rezept + Tags"**
 
-#### 1–3. Wie „Rezept speichern" (Share Sheet → Wake → Extract → Notiz speichern)
+### Share Sheet aktivieren:
+- **„Im Share Sheet anzeigen"** aktivieren
+- Eingabetypen: **URLs**
 
-#### 4. „Inhalte von URL abrufen"
+### Aktionen hinzufügen:
+
+#### Aktion 1: „Inhalte von URL abrufen" (Wake)
+- URL: `https://recipe-tool-redo.onrender.com/wake`
+- Methode: **GET**
+
+#### Aktion 2: „Inhalte von URL abrufen" (Rezept holen)
+- URL: `https://recipe-tool-redo.onrender.com/extract`
+- Methode: **POST**
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- Neues Feld → **Text**: Schlüssel `url`, Wert: **Kurzbefehl-Eingabe**
+
+#### Aktion 3: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `formatted_note`
+
+#### Aktion 4: „Notiz erstellen"
+- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 3)
+- Ordner: **Rezepte**
+
+#### Aktion 5: „Inhalte von URL abrufen" (Tags holen)
 - URL: `https://recipe-tool-redo.onrender.com/categorize`
 - Methode: **POST**
-- Body: `{"url": "Kurzbefehl-Eingabe"}`
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- Neues Feld → **Text**: Schlüssel `url`, Wert: **Kurzbefehl-Eingabe**
 
-#### 5. „Wert aus Wörterbuch abrufen" → Schlüssel: `tags`
+#### Aktion 6: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `tags`
+- → Variable setzen: `tags`
 
-#### 6. „Wert aus Wörterbuch abrufen" → Schlüssel: `time_estimate`
+#### Aktion 7: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `time_estimate`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 5)
+- → Variable setzen: `zeit`
 
-#### 7. „Hinweis anzeigen"
-- `✅ Rezept gespeichert!\n\n🏷️ Tags: tags\n⏱️ Zeit: time_estimate`
+#### Aktion 8: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `difficulty`
+- „in": **Inhalte von URL** (Ausgabe von Aktion 5)
+- → Variable setzen: `schwierigkeit`
+
+#### Aktion 9: „Hinweis anzeigen"
+- Tippe ins Textfeld und schreibe (Variablen durch Tippen einfügen):
+  ```
+  ✅ Rezept gespeichert!
+
+  🏷️ Tags: tags
+  ⏱️ Zeit: zeit
+  📈 Schwierigkeit: schwierigkeit
+  ```
 
 ---
 
 ## 📅 Shortcut: Wochenplan erstellen
 
-Erstellt einen Essensplan für mehrere Tage mit Einkaufsliste.
+Erstellt einen Essensplan für mehrere Tage mit Gesamt-Einkaufsliste. Braucht **kein** Video — funktioniert eigenständig!
 
-**Neuen Kurzbefehl erstellen** → Name: „Wochenplan"
+**Kurzbefehle-App → + → Name: „Wochenplan"**
 
-#### 1. „Inhalte von URL abrufen" (Wake)
+> Kein Share Sheet nötig — dieser Shortcut wird direkt gestartet oder per Siri aufgerufen.
+
+### Aktionen hinzufügen:
+
+#### Aktion 1: „Inhalte von URL abrufen" (Wake)
 - URL: `https://recipe-tool-redo.onrender.com/wake`
 - Methode: **GET**
 
-#### 2. „Nach Eingabe fragen"
+#### Aktion 2: „Nach Eingabe fragen"
+- Suche nach: **Eingabe** → „Nach Eingabe fragen"
 - Frage: `Für wie viele Tage? (1-7)`
 - Eingabetyp: **Zahl**
-- Variable: `tage`
 
-#### 3. „Nach Eingabe fragen" (optional)
-- Frage: `Wünsche? (z.B. "vegetarisch", "schnell", leer lassen für alles)`
+#### Aktion 3: „Variable setzen"
+- Name: `tage`
+- Eingabe: **Bereitgestellte Eingabe**
+
+#### Aktion 4: „Nach Eingabe fragen"
+- Frage: `Wünsche? (z.B. "vegetarisch", "schnell", "italienisch" — leer lassen für alles)`
 - Eingabetyp: **Text**
-- Variable: `wuensche`
 
-#### 4. „Inhalte von URL abrufen"
+#### Aktion 5: „Variable setzen"
+- Name: `wuensche`
+- Eingabe: **Bereitgestellte Eingabe**
+
+#### Aktion 6: „Inhalte von URL abrufen"
 - URL: `https://recipe-tool-redo.onrender.com/meal-plan`
 - Methode: **POST**
 - Header: `Content-Type` = `application/json`
-- Body:
-  ```json
-  {
-    "days": tage,
-    "preferences": wuensche
-  }
-  ```
+- Anforderungsinhalt: **JSON**
+- **Neues Feld** → **Zahl**: Schlüssel `days`, Wert: Variable `tage`
+- **Neues Feld** → **Text**: Schlüssel `preferences`, Wert: Variable `wuensche`
 
-#### 5. „Wert aus Wörterbuch abrufen"
+#### Aktion 7: „Wert aus Wörterbuch abrufen"
 - Schlüssel: `formatted_plan`
 
-#### 6. „Notiz erstellen"
-- Inhalt: Wörterbuch-Wert
-- Ordner: Rezepte
+#### Aktion 8: „Notiz erstellen"
+- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 7)
+- Ordner: **Rezepte**
 
-#### 7. „Hinweis anzeigen"
-- `📅 Wochenplan erstellt!`
+#### Aktion 9: „Hinweis anzeigen"
+- Text: `📅 Wochenplan erstellt & in Notizen gespeichert!`
 
 ---
 
-## 🖼️ Shortcut: Rezeptkarte teilen
+## 🖼️ Shortcut: Rezeptkarte anzeigen
 
-Erstellt eine hübsche Rezeptkarte als Webseite zum Screenshotten oder Teilen.
+Öffnet eine hübsche Rezeptkarte im Browser — perfekt zum Screenshotten und per WhatsApp teilen.
 
-**Neuen Kurzbefehl erstellen** → Name: „Rezeptkarte"
+**Kurzbefehle-App → + → Name: „Rezeptkarte"**
 
-#### 1. „URLs von Share Sheet erhalten"
+### Share Sheet aktivieren:
+- **„Im Share Sheet anzeigen"** aktivieren
+- Eingabetypen: **URLs**
 
-#### 2. Wake + Extract (wie oben)
+### Aktionen hinzufügen:
 
-#### 3. „URL öffnen"
+#### Aktion 1: „Inhalte von URL abrufen" (Wake)
+- URL: `https://recipe-tool-redo.onrender.com/wake`
+- Methode: **GET**
+
+#### Aktion 2: „Inhalte von URL abrufen" (Rezept holen)
+- URL: `https://recipe-tool-redo.onrender.com/extract`
+- Methode: **POST**
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- Neues Feld → **Text**: Schlüssel `url`, Wert: **Kurzbefehl-Eingabe**
+
+> ⚠️ Dieser Schritt ist nötig damit das Rezept im Server-Cache ist!
+
+#### Aktion 3: „Inhalte von URL abrufen" (Rezeptkarte)
 - URL: `https://recipe-tool-redo.onrender.com/recipe-card`
-- → Öffnet eine hübsche Rezeptkarte im Browser
-- Screenshot machen → per WhatsApp etc. teilen!
+- Methode: **POST**
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- Neues Feld → **Text**: Schlüssel `url`, Wert: **Kurzbefehl-Eingabe**
 
-> **Hinweis:** `/recipe-card` braucht ein vorher extrahiertes Rezept (Cache). Also erst „Rezept speichern" ausführen, dann „Rezeptkarte".
+#### Aktion 4: „Schnellansicht"
+- Suche nach: **Schnellansicht** → hinzufügen
+- Eingabe: **Inhalte von URL** (Ausgabe von Aktion 3)
+- → Zeigt die hübsche Rezeptkarte an!
+
+#### Aktion 5: „Teilen"  (optional)
+- Suche nach: **Teilen** → hinzufügen
+- → Öffnet das Share Sheet damit du die Karte per WhatsApp, iMessage etc. teilen kannst
