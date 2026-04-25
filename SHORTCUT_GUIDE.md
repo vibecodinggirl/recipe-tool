@@ -244,11 +244,15 @@ Erstellt direkt aus einem Rezept-Video eine kategorisierte Einkaufsliste (nach S
 
 ## 🛒 Shortcut: Einkaufsliste aus Notiz
 
-Erstellt eine Einkaufsliste aus einer **bereits gespeicherten Rezept-Notiz**. Du kopierst den Text aus Apple Notes → Shortcut macht daraus eine sortierte Einkaufsliste.
+Erstellt eine Einkaufsliste aus einer **bereits gespeicherten Rezept-Notiz**. Entweder direkt per Share Sheet aus Apple Notes, oder manuell per Text eingeben.
 
 **Kurzbefehle-App → + → Name: „Einkaufsliste aus Notiz"**
 
-> Kein Share Sheet nötig — wird manuell gestartet oder per Siri.
+### Share Sheet aktivieren:
+1. Tippe oben auf den **Namen** „Einkaufsliste aus Notiz"
+2. Aktiviere **„Im Share Sheet anzeigen"**
+3. Bei **Eingabetypen**: wähle **Text** (nicht URLs!)
+4. Tippe auf **Fertig**
 
 ### Aktionen hinzufügen:
 
@@ -256,16 +260,21 @@ Erstellt eine Einkaufsliste aus einer **bereits gespeicherten Rezept-Notiz**. Du
 - URL: `https://recipe-tool-redo.onrender.com/wake`
 - Methode: **GET**
 
-#### Aktion 2: „Nach Eingabe fragen"
-- Suche nach: **Eingabe** → „Nach Eingabe fragen"
-- Frage: `Kopiere den Rezepttext oder die Zutatenliste hier rein:`
-- Eingabetyp: **Text**
+#### Aktion 2: „Falls"
+- Suche nach: **Falls** → hinzufügen
+- Falls **Kurzbefehl-Eingabe** → **hat einen Wert**
+- → Dann: **Variable setzen** → Name: `rezepttext`, Wert: **Kurzbefehl-Eingabe**
 
-#### Aktion 3: „Variable setzen"
-- Name: `rezepttext`
-- Eingabe: **Bereitgestellte Eingabe** (Ausgabe von Aktion 2)
+#### Aktion 3: „Sonst" (im selben Falls-Block)
+- **„Nach Eingabe fragen"** hinzufügen
+  - Frage: `Kopiere den Rezepttext oder die Zutatenliste hier rein:`
+  - Eingabetyp: **Text**
+- **Variable setzen** → Name: `rezepttext`, Wert: **Bereitgestellte Eingabe**
 
-#### Aktion 4: „Inhalte von URL abrufen"
+#### Aktion 4: „Ende von Falls"
+- (wird automatisch hinzugefügt)
+
+#### Aktion 5: „Inhalte von URL abrufen"
 - URL: `https://recipe-tool-redo.onrender.com/shopping-list`
 - Tippe auf das blaue **„Pfeil"**-Symbol rechts
 - Methode: **POST**
@@ -277,22 +286,28 @@ Erstellt eine Einkaufsliste aus einer **bereits gespeicherten Rezept-Notiz**. Du
   - Schlüssel: `text`
   - Wert: Tippe drauf → **Variable wählen** → `rezepttext`
 
-#### Aktion 5: „Wert aus Wörterbuch abrufen"
+#### Aktion 6: „Wert aus Wörterbuch abrufen"
 - Schlüssel: `formatted_list`
 
-#### Aktion 6: „Notiz erstellen"
-- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 5)
+#### Aktion 7: „Notiz erstellen"
+- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 6)
 - Ordner: **Einkaufslisten**
 
-#### Aktion 7: „Hinweis anzeigen"
+#### Aktion 8: „Hinweis anzeigen"
 - Text: `🛒 Einkaufsliste erstellt!`
 
 ### So benutzt du es:
+
+**Option A — Share Sheet (schneller):**
 1. Öffne deine **Rezept-Notiz** in Apple Notes
-2. **Markiere alles** (oder nur die Zutaten) → **Kopieren**
-3. Öffne den Shortcut **„Einkaufsliste aus Notiz"**
-4. **Einfügen** in das Textfeld → Fertig!
-5. Oder per Siri: **„Hey Siri, Einkaufsliste aus Notiz"** → Text einfügen
+2. **Markiere den Text** (Zutaten oder alles)
+3. Tippe auf **Teilen** → wähle **„Einkaufsliste aus Notiz"**
+4. Fertig! ✅
+
+**Option B — Manuell:**
+1. **Kopiere** den Text aus der Notiz
+2. Starte den Shortcut (oder **„Hey Siri, Einkaufsliste aus Notiz"**)
+3. **Einfügen** in das Textfeld → Fertig!
 
 ---
 
