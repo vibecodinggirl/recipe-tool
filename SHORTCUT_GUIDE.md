@@ -164,150 +164,126 @@ So machst du den Kurzbefehl im Share Sheet verfügbar:
 
 ---
 
-## 🛒 Shortcut: Einkaufsliste aus TikTok/Instagram
+## 🛒 Shortcut: Smarte Einkaufsliste (Video + Notiz)
 
-Erstellt direkt aus einem Rezept-Video eine kategorisierte Einkaufsliste (nach Supermarkt-Abteilung sortiert).
+**Ein Shortcut für alles:** Erkennt automatisch ob du einen TikTok/Instagram-Link oder Rezepttext teilst und erstellt daraus eine kategorisierte Einkaufsliste.
 
-**Kurzbefehle-App öffnen → + (oben rechts) → neuer Kurzbefehl → Name: „Einkaufsliste"**
+**Kurzbefehle-App → + → Name: „Einkaufsliste"**
 
 ### Share Sheet aktivieren:
 1. Tippe oben auf den **Namen** „Einkaufsliste"
 2. Aktiviere **„Im Share Sheet anzeigen"**
-3. Bei **Eingabetypen**: wähle **URLs**
+3. Bei **Eingabetypen**: wähle **URLs** UND **Text** (beides!)
 4. Tippe auf **Fertig**
 
 ### Aktionen hinzufügen:
 
-#### Aktion 1: „Inhalte von URL abrufen"
+#### Aktion 1: „Inhalte von URL abrufen" (Wake)
 - Suche nach: **Inhalte von URL** → hinzufügen
 - URL: `https://recipe-tool-redo.onrender.com/wake`
 - Tippe auf das blaue **„Pfeil"**-Symbol rechts
 - Methode: **GET**
 
-#### Aktion 2: „Inhalte von URL abrufen"
-- Nochmal **Inhalte von URL** hinzufügen
+#### Aktion 2: „Text"
+- Suche nach: **Text** → hinzufügen
+- Tippe ins Textfeld → wähle **„Kurzbefehl-Eingabe"** (lila Blase)
+- → Variable setzen: Name `eingabe`
+
+> Damit wird die Eingabe (egal ob URL oder Text) als Text gespeichert.
+
+#### Aktion 3: „Falls"
+- Suche nach: **Falls** → hinzufügen
+- Falls **`eingabe`** → **beginnt mit** → `http`
+
+> Das erkennt ob es ein Link (TikTok/Instagram) oder Text (Notiz) ist.
+
+---
+
+### ➡️ DANN (es ist ein Video-Link):
+
+#### Aktion 4: „Inhalte von URL abrufen" (Rezept extrahieren)
 - URL: `https://recipe-tool-redo.onrender.com/extract`
-- Tippe auf das blaue **„Pfeil"**-Symbol rechts
 - Methode: **POST**
 - Tippe auf **„Header hinzufügen"**:
   - Schlüssel: `Content-Type`
   - Wert: `application/json`
 - Anforderungsinhalt: **JSON**
-- Tippe auf **„Neues Feld hinzufügen"** → **Text**
+- **„Neues Feld hinzufügen"** → **Text**:
   - Schlüssel: `url`
-  - Wert: Tippe drauf → wähle **„Kurzbefehl-Eingabe"** (lila Blase)
-
-#### Aktion 3: „Wert aus Wörterbuch abrufen"
-- Suche nach: **Wörterbuch** → „Wert aus Wörterbuch abrufen" hinzufügen
-- Schlüssel: `ingredients`
-- „in": sollte automatisch „Inhalte von URL" sein (die Ausgabe von Aktion 2)
-
-#### Aktion 4: „Variable setzen"
-- Suche nach: **Variable** → „Variable setzen" hinzufügen
-- Name: `zutaten`
-- Eingabe: **Wörterbuch-Wert** (Ausgabe von Aktion 3)
+  - Wert: Tippe drauf → **Variable wählen** → `eingabe`
 
 #### Aktion 5: „Wert aus Wörterbuch abrufen"
-- Nochmal hinzufügen
+- Schlüssel: `ingredients`
+- → Variable setzen: `zutaten`
+
+#### Aktion 6: „Wert aus Wörterbuch abrufen"
 - Schlüssel: `title`
-- „in": Tippe drauf → wähle **„Inhalte von URL"** (Ausgabe von Aktion 2, NICHT von Aktion 1!)
+- „in": **Inhalte von URL** (Ausgabe von Aktion 4)
+- → Variable setzen: `titel`
 
-#### Aktion 6: „Variable setzen"
-- Name: `titel`
-- Eingabe: **Wörterbuch-Wert** (Ausgabe von Aktion 5)
-
-#### Aktion 7: „Inhalte von URL abrufen"
+#### Aktion 7: „Inhalte von URL abrufen" (Einkaufsliste aus Zutaten)
 - URL: `https://recipe-tool-redo.onrender.com/shopping-list`
 - Methode: **POST**
 - Header: `Content-Type` = `application/json`
 - Anforderungsinhalt: **JSON**
 - **„Neues Feld hinzufügen"** → **Text**:
   - Schlüssel: `title`
-  - Wert: Tippe drauf → **Variable wählen** → `titel`
+  - Wert: Variable `titel`
 - **„Neues Feld hinzufügen"** → **Array**:
   - Schlüssel: `ingredients`
-  - Wert: Tippe drauf → **Variable wählen** → `zutaten`
+  - Wert: Variable `zutaten`
 
 #### Aktion 8: „Wert aus Wörterbuch abrufen"
 - Schlüssel: `formatted_list`
+- → Variable setzen: `einkaufsliste`
 
-#### Aktion 9: „Notiz erstellen"
+---
+
+### ➡️ SONST (es ist Text aus einer Notiz):
+
+#### Aktion 9: „Inhalte von URL abrufen" (Einkaufsliste aus Text)
+- URL: `https://recipe-tool-redo.onrender.com/shopping-list`
+- Methode: **POST**
+- Header: `Content-Type` = `application/json`
+- Anforderungsinhalt: **JSON**
+- **„Neues Feld hinzufügen"** → **Text**:
+  - Schlüssel: `text`
+  - Wert: Tippe drauf → **Variable wählen** → `eingabe`
+
+#### Aktion 10: „Wert aus Wörterbuch abrufen"
+- Schlüssel: `formatted_list`
+- → Variable setzen: `einkaufsliste`
+
+---
+
+### ➡️ ENDE FALLS + Speichern:
+
+#### Aktion 11: „Ende von Falls"
+- (wird automatisch hinzugefügt)
+
+#### Aktion 12: „Notiz erstellen"
 - Suche nach: **Notiz** → „Notiz erstellen" hinzufügen
-- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 8)
+- Inhalt: Variable **`einkaufsliste`**
 - Ordner: **Einkaufslisten** (erstelle diesen Ordner vorher in der Notizen-App)
 
-#### Aktion 10: „Hinweis anzeigen"
-- Suche nach: **Hinweis** → hinzufügen
+#### Aktion 13: „Hinweis anzeigen"
 - Text: `🛒 Einkaufsliste erstellt!`
 
 ---
 
-## 🛒 Shortcut: Einkaufsliste aus Notiz
-
-Erstellt eine Einkaufsliste aus einer **bereits gespeicherten Rezept-Notiz**. Entweder direkt per Share Sheet aus Apple Notes, oder manuell per Text eingeben.
-
-**Kurzbefehle-App → + → Name: „Einkaufsliste aus Notiz"**
-
-### Share Sheet aktivieren:
-1. Tippe oben auf den **Namen** „Einkaufsliste aus Notiz"
-2. Aktiviere **„Im Share Sheet anzeigen"**
-3. Bei **Eingabetypen**: wähle **Text** (nicht URLs!)
-4. Tippe auf **Fertig**
-
-### Aktionen hinzufügen:
-
-#### Aktion 1: „Inhalte von URL abrufen" (Wake)
-- URL: `https://recipe-tool-redo.onrender.com/wake`
-- Methode: **GET**
-
-#### Aktion 2: „Falls"
-- Suche nach: **Falls** → hinzufügen
-- Falls **Kurzbefehl-Eingabe** → **hat einen Wert**
-- → Dann: **Variable setzen** → Name: `rezepttext`, Wert: **Kurzbefehl-Eingabe**
-
-#### Aktion 3: „Sonst" (im selben Falls-Block)
-- **„Nach Eingabe fragen"** hinzufügen
-  - Frage: `Kopiere den Rezepttext oder die Zutatenliste hier rein:`
-  - Eingabetyp: **Text**
-- **Variable setzen** → Name: `rezepttext`, Wert: **Bereitgestellte Eingabe**
-
-#### Aktion 4: „Ende von Falls"
-- (wird automatisch hinzugefügt)
-
-#### Aktion 5: „Inhalte von URL abrufen"
-- URL: `https://recipe-tool-redo.onrender.com/shopping-list`
-- Tippe auf das blaue **„Pfeil"**-Symbol rechts
-- Methode: **POST**
-- Tippe auf **„Header hinzufügen"**:
-  - Schlüssel: `Content-Type`
-  - Wert: `application/json`
-- Anforderungsinhalt: **JSON**
-- **„Neues Feld hinzufügen"** → **Text**:
-  - Schlüssel: `text`
-  - Wert: Tippe drauf → **Variable wählen** → `rezepttext`
-
-#### Aktion 6: „Wert aus Wörterbuch abrufen"
-- Schlüssel: `formatted_list`
-
-#### Aktion 7: „Notiz erstellen"
-- Inhalt: **Wörterbuch-Wert** (Ausgabe von Aktion 6)
-- Ordner: **Einkaufslisten**
-
-#### Aktion 8: „Hinweis anzeigen"
-- Text: `🛒 Einkaufsliste erstellt!`
-
 ### So benutzt du es:
 
-**Option A — Share Sheet (schneller):**
-1. Öffne deine **Rezept-Notiz** in Apple Notes
-2. **Markiere den Text** (Zutaten oder alles)
-3. Tippe auf **Teilen** → wähle **„Einkaufsliste aus Notiz"**
-4. Fertig! ✅
+**Von TikTok/Instagram:**
+1. Video öffnen → **Teilen** → **„Einkaufsliste"** wählen
+2. Rezept wird extrahiert → Einkaufsliste nach Abteilung sortiert ✅
 
-**Option B — Manuell:**
-1. **Kopiere** den Text aus der Notiz
-2. Starte den Shortcut (oder **„Hey Siri, Einkaufsliste aus Notiz"**)
-3. **Einfügen** in das Textfeld → Fertig!
+**Von Apple Notes:**
+1. Rezept-Notiz öffnen → Text markieren → **Teilen** → **„Einkaufsliste"** wählen
+2. Text wird analysiert → Einkaufsliste erstellt ✅
+
+**Manuell / Siri:**
+1. **„Hey Siri, Einkaufsliste"**
+2. Falls kein Text per Share Sheet → du wirst gefragt was du einfügen willst
 
 ---
 
