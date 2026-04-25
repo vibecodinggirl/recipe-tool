@@ -499,13 +499,22 @@ Leere Kategorien weglassen. Sprache: Deutsch."""
     try:
         raw = llm_query(prompt, user_input)
         data = _parse_json_response(raw)
-        # Formatiere als Text für Apple Reminders
+        # Formatiere als Text für Apple Notes
         lines = [f"🛒 {data.get('title', 'Einkaufsliste')}"]
         for cat in data.get("categories", []):
             lines.append(f"\n{cat['name']}:")
             for item in cat["items"]:
                 lines.append(f"  ☐ {item}")
         data["formatted_list"] = "\n".join(lines)
+
+        # Flache Liste aller Items für Apple Erinnerungen (jede Zutat = eine Erinnerung)
+        all_items = []
+        for cat in data.get("categories", []):
+            cat_name = cat["name"]
+            for item in cat["items"]:
+                all_items.append(f"{cat_name} {item}")
+        data["items"] = all_items
+
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Einkaufsliste fehlgeschlagen: {e}")
