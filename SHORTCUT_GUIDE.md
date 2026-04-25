@@ -109,12 +109,47 @@ Falls dir der obige Shortcut zu komplex ist — diese Version funktioniert immer
 
 ## So benutzt du es
 
+### Option A: Direkt aus dem Share Sheet (empfohlen!)
+
 1. Öffne ein **TikTok** oder **Instagram** Video mit einem Rezept
-2. **Kopiere den Link** (Teilen → Link kopieren)
-3. Öffne den **Shortcut** „Rezept speichern"
-4. Warte ein paar Sekunden ⏳ (Render free tier braucht ~30s beim ersten Mal)
-5. Falls Rezept automatisch gefunden → direkt als Note gespeichert ✅
-6. Falls nicht → Text aus Video eingeben → dann als Note gespeichert ✅
+2. Tippe auf **Teilen** (Share-Button)
+3. Wähle den Kurzbefehl **„Rezept speichern"** aus der Liste
+4. Fertig! Das Rezept wird automatisch in Apple Notes gespeichert ✅
+
+### Option B: Manuell mit Zwischenablage
+
+1. **Kopiere den Link** (Teilen → Link kopieren)
+2. Öffne den **Shortcut** „Rezept speichern"
+3. Warte ein paar Sekunden ⏳
+4. Rezept wird als Note gespeichert ✅
+
+---
+
+## Share Sheet einrichten
+
+So machst du den Kurzbefehl im Share Sheet verfügbar:
+
+1. Öffne **Kurzbefehle-App** → deinen Kurzbefehl antippen (ℹ️-Button oder lang drücken → Details)
+2. Tippe oben auf den **Namen/das Icon** des Kurzbefehls
+3. Aktiviere **„Im Share Sheet anzeigen"**
+4. Bei **Eingabetypen** wähle: **URLs** (nur das reicht)
+5. Fertig!
+
+### Shortcut für Share Sheet (angepasste Aktionen):
+
+#### 0. „Inhalte von URL abrufen" (Server aufwecken)
+- URL: `https://recipe-tool-redo.onrender.com/wake`
+- Methode: **GET**
+
+#### 1. „Kurzbefehl-Eingabe" verwenden
+- Die URL kommt automatisch vom Share Sheet!
+- **Kein** „Zwischenablage abrufen" nötig
+
+#### 2. „Variable festlegen"
+- Name: `videolink`
+- Wert: **Kurzbefehl-Eingabe** (nicht Zwischenablage!)
+
+#### 3–6: Rest bleibt gleich wie oben (ab „Inhalte von URL abrufen" POST-Aufruf)
 
 ---
 
