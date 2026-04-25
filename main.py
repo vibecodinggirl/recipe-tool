@@ -67,6 +67,12 @@ async def health():
     return info
 
 
+@app.get("/wake")
+async def wake():
+    """Leichtgewichtiger Endpoint zum Aufwecken des Servers (Render Cold Start)."""
+    return {"status": "awake"}
+
+
 @app.post("/debug")
 async def debug_endpoint(request: VideoRequest):
     """Debug: zeigt was bei jedem Schritt passiert."""

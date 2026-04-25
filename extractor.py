@@ -204,17 +204,17 @@ def _extract_openrouter(transcript: str) -> str:
     """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry + Fallback-Modelle)."""
     import time
 
-    # Baue Modellliste: Primärmodell zuerst, dann Fallbacks
+    # Baue Modellliste: Primärmodell zuerst, dann max. 2 Fallbacks
     models_to_try = [OPENROUTER_MODEL]
     for m in FALLBACK_MODELS:
-        if m not in models_to_try:
+        if m not in models_to_try and len(models_to_try) < 3:
             models_to_try.append(m)
 
     last_error = None
     for model in models_to_try:
         logger.info(f"Versuche OpenRouter Modell: {model}")
 
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 response = httpx.post(
                     "https://openrouter.ai/api/v1/chat/completions",
@@ -231,7 +231,7 @@ def _extract_openrouter(transcript: str) -> str:
                         "temperature": 0.3,
                         "max_tokens": 2000,
                     },
-                    timeout=90.0,
+                    timeout=30.0,
                 )
             except httpx.TimeoutException:
                 logger.warning(f"Timeout bei {model} (Versuch {attempt + 1}/3)")
@@ -246,7 +246,7 @@ def _extract_openrouter(transcript: str) -> str:
                     logger.warning(f"Rate limit Details: {body}")
                 except Exception:
                     logger.warning(f"Rate limit Body: {response.text[:200]}")
-                wait = 15 * (attempt + 1)
+                wait = 5 * (attempt + 1)
                 logger.warning(f"Rate limit bei {model}, warte {wait}s (Versuch {attempt + 1}/3)...")
                 time.sleep(wait)
                 last_error = f"Rate limit bei {model}"

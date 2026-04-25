@@ -20,6 +20,11 @@ Funktioniert mit Render-Server: `https://recipe-tool-redo.onrender.com`
 
 ### Aktionen (in dieser Reihenfolge):
 
+#### 0. „Inhalte von URL abrufen" (Server aufwecken)
+- URL: `https://recipe-tool-redo.onrender.com/wake`
+- Methode: **GET**
+- ⚠️ **Wichtig:** Render Free-Tier schläft nach Inaktivität ein. Dieser Schritt weckt den Server auf (kann 30-60s dauern). Ohne diesen Schritt kommt es zu Zeitüberschreitungen!
+
 #### 1. „Zwischenablage abrufen"
 - Kopiere den Video-Link vorher in die Zwischenablage
 
