@@ -12,3 +12,5 @@ services:
         sync: false
       - key: NOTE_STYLE
         value: classic
+      - key: RENDER_EXTERNAL_URL
+        value: https://recipe-tool-redo.onrender.com

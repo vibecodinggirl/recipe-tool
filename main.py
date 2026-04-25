@@ -4,11 +4,16 @@ und speichert sie in Apple Notizen via Apple Shortcut.
 """
 
 import os
+import asyncio
+import hashlib
 import tempfile
 import logging
+import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
 
@@ -23,13 +28,71 @@ NOTE_STYLE = os.getenv("NOTE_STYLE", "classic")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ============================================================
+# In-Memory Cache (max 100 Rezepte, 24h TTL)
+# ============================================================
+MAX_CACHE = 100
+CACHE_TTL = 86400  # 24 Stunden
+_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
+
+
+def _cache_key(url: str) -> str:
+    """Normalisiert URL und gibt einen Cache-Key zurück."""
+    clean = url.split("?")[0].rstrip("/").lower()
+    return hashlib.md5(clean.encode()).hexdigest()
+
+
+def _cache_get(url: str) -> dict | None:
+    key = _cache_key(url)
+    if key in _cache:
+        ts, data = _cache[key]
+        if time.time() - ts < CACHE_TTL:
+            logger.info(f"Cache HIT für {url[:60]}")
+            return data
+        del _cache[key]
+    return None
+
+
+def _cache_set(url: str, data: dict):
+    key = _cache_key(url)
+    _cache[key] = (time.time(), data)
+    while len(_cache) > MAX_CACHE:
+        _cache.popitem(last=False)
+
+
+# ============================================================
+# Keep-Alive (pingt sich selbst alle 10 Min → kein Cold Start)
+# ============================================================
+KEEP_ALIVE_INTERVAL = 600  # 10 Minuten
+
+
+async def _keep_alive_loop():
+    """Pingt den eigenen /wake Endpoint um Render-Sleep zu verhindern."""
+    import httpx
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "")
+    if not render_url:
+        logger.info("RENDER_EXTERNAL_URL nicht gesetzt — Keep-Alive deaktiviert")
+        return
+    wake_url = f"{render_url}/wake"
+    logger.info(f"Keep-Alive aktiv: Pinge {wake_url} alle {KEEP_ALIVE_INTERVAL}s")
+    while True:
+        await asyncio.sleep(KEEP_ALIVE_INTERVAL)
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(wake_url, timeout=10.0)
+            logger.debug("Keep-Alive ping OK")
+        except Exception as e:
+            logger.warning(f"Keep-Alive ping fehlgeschlagen: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure tmp directory exists
+    # Startup
     os.makedirs("tmp", exist_ok=True)
+    keep_alive_task = asyncio.create_task(_keep_alive_loop())
     yield
-    # Shutdown: cleanup tmp files
+    # Shutdown
+    keep_alive_task.cancel()
     for f in os.listdir("tmp"):
         try:
             os.remove(os.path.join("tmp", f))
@@ -71,6 +134,27 @@ async def health():
 async def wake():
     """Leichtgewichtiger Endpoint zum Aufwecken des Servers (Render Cold Start)."""
     return {"status": "awake"}
+
+
+@app.get("/cache/stats")
+async def cache_stats():
+    """Zeigt Cache-Statistiken."""
+    return {"cached_recipes": len(_cache), "max_cache": MAX_CACHE, "ttl_seconds": CACHE_TTL}
+
+
+@app.exception_handler(HTTPException)
+async def friendly_error_handler(request: Request, exc: HTTPException):
+    """Gibt Shortcut-freundliche Fehlermeldungen zurück."""
+    error_messages = {
+        400: "❌ Link ungültig oder Video nicht erreichbar. Versuche einen anderen Link.",
+        422: "❌ Kein Rezept gefunden. Das Video hat wohl kein Rezept in der Beschreibung.",
+        500: "❌ Server-Fehler. Bitte versuche es in ein paar Minuten nochmal.",
+    }
+    friendly = error_messages.get(exc.status_code, f"❌ Fehler: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "error_message": friendly},
+    )
 
 
 @app.post("/debug")
@@ -135,7 +219,12 @@ async def extract_recipe_endpoint(request: VideoRequest):
     url = str(request.url)
     logger.info(f"Processing URL: {url}")
 
-    # ===== PASS 1: Schnell — nur Caption/Metadaten =====
+    # ===== CACHE CHECK =====
+    cached = _cache_get(url)
+    if cached:
+        return RecipeResponse(**cached)
+
+    # ===== PASS 1: Schnell — nur Caption/Metadaten ====="
     try:
         video_data = download_video_data(url, fast_mode=True)
     except Exception as e:
@@ -216,6 +305,9 @@ async def extract_recipe_endpoint(request: VideoRequest):
 
         formatted = format_for_apple_notes(recipe)
         recipe["formatted_note"] = formatted
+
+        # Im Cache speichern
+        _cache_set(url, recipe)
 
         return RecipeResponse(**recipe)
 
