@@ -13,12 +13,12 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, HttpUrl
+from fastapi.responses import JSONResponse, HTMLResponse
+from pydantic import BaseModel, HttpUrl, Field
 from dotenv import load_dotenv
 
 from downloader import download_video_data, _download_audio
-from extractor import transcribe_audio, extract_recipe, build_extraction_input, check_local_dependencies, MODE
+from extractor import transcribe_audio, extract_recipe, build_extraction_input, check_local_dependencies, MODE, llm_query
 from ocr import extract_text_from_frames, cleanup_frames
 
 load_dotenv()
@@ -110,6 +110,30 @@ app = FastAPI(
 
 class VideoRequest(BaseModel):
     url: HttpUrl
+
+
+class ScaleRequest(BaseModel):
+    title: str
+    servings: str
+    ingredients: list[str]
+    steps: list[str]
+    target_servings: str
+
+
+class ShoppingListRequest(BaseModel):
+    ingredients: list[str]
+    title: str = ""
+
+
+class NutritionRequest(BaseModel):
+    title: str
+    ingredients: list[str]
+    servings: str = ""
+
+
+class MealPlanRequest(BaseModel):
+    days: int = Field(default=5, ge=1, le=7)
+    preferences: str = ""
 
 
 class RecipeResponse(BaseModel):
@@ -438,6 +462,412 @@ async def list_styles():
             "checklist": {"description": "Zum Abhaken beim Kochen & Einkaufen", "preview": _format_checklist(example)},
         }
     }
+
+
+# ============================================================
+# Feature: Einkaufsliste
+# ============================================================
+
+@app.post("/shopping-list")
+async def shopping_list(request: ShoppingListRequest):
+    """Erstellt eine kategorisierte Einkaufsliste aus Zutaten."""
+    prompt = """Du organisierst Zutaten als Einkaufsliste. Gruppiere nach Supermarkt-Abteilung.
+Antworte NUR mit JSON:
+{
+    "title": "Einkaufsliste für ...",
+    "categories": [
+        {"name": "🥩 Fleisch & Fisch", "items": ["..."]},
+        {"name": "🥬 Obst & Gemüse", "items": ["..."]},
+        {"name": "🧀 Milchprodukte", "items": ["..."]},
+        {"name": "🍝 Trockenwaren & Gewürze", "items": ["..."]},
+        {"name": "🛒 Sonstiges", "items": ["..."]}
+    ]
+}
+Leere Kategorien weglassen. Sprache: Deutsch."""
+
+    ingredients_text = "\n".join(f"- {ing}" for ing in request.ingredients)
+    user_input = f"Rezept: {request.title}\n\nZutaten:\n{ingredients_text}"
+
+    try:
+        raw = llm_query(prompt, user_input)
+        data = _parse_json_response(raw)
+        # Formatiere als Text für Apple Reminders
+        lines = [f"🛒 {data.get('title', 'Einkaufsliste')}"]
+        for cat in data.get("categories", []):
+            lines.append(f"\n{cat['name']}:")
+            for item in cat["items"]:
+                lines.append(f"  ☐ {item}")
+        data["formatted_list"] = "\n".join(lines)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Einkaufsliste fehlgeschlagen: {e}")
+
+
+# ============================================================
+# Feature: Portionen umrechnen
+# ============================================================
+
+@app.post("/scale")
+async def scale_recipe(request: ScaleRequest):
+    """Rechnet Zutaten auf eine andere Portionsgröße um."""
+    prompt = """Du rechnest Rezept-Mengen um. Passe ALLE Zutaten proportional an die neue Portionsgröße an.
+Antworte NUR mit JSON:
+{
+    "title": "Rezeptname",
+    "servings": "neue Portionsgröße",
+    "ingredients": ["Zutat 1 mit neuer Menge", "Zutat 2 mit neuer Menge"],
+    "steps": ["Schritt 1", "Schritt 2"]
+}
+Runde auf sinnvolle Mengen (nicht 2.67 Eier → 3 Eier). Sprache: Deutsch."""
+
+    user_input = (
+        f"Rezept: {request.title}\n"
+        f"Aktuelle Portionen: {request.servings}\n"
+        f"Zutaten:\n" + "\n".join(f"- {ing}" for ing in request.ingredients) +
+        f"\nSchritte:\n" + "\n".join(f"- {s}" for s in request.steps) +
+        f"\n\nBitte umrechnen auf: {request.target_servings}"
+    )
+
+    try:
+        raw = llm_query(prompt, user_input)
+        data = _parse_json_response(raw)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Umrechnung fehlgeschlagen: {e}")
+
+
+# ============================================================
+# Feature: Kategorie-Tags
+# ============================================================
+
+@app.post("/categorize")
+async def categorize_recipe(request: VideoRequest):
+    """Extrahiert Rezept UND vergibt automatisch Kategorie-Tags."""
+    url = str(request.url)
+
+    # Zuerst das normale Rezept holen (nutzt Cache wenn vorhanden)
+    cached = _cache_get(url)
+    if not cached:
+        # Rezept normal extrahieren — extract aufrufen wäre zirkulär, also direkt Daten holen
+        raise HTTPException(status_code=400, detail="Bitte zuerst /extract aufrufen, dann /categorize mit derselben URL.")
+
+    recipe = cached
+    prompt = """Analysiere das Rezept und vergib passende Tags. Antworte NUR mit JSON:
+{
+    "tags": ["Tag1", "Tag2", "Tag3"],
+    "category": "Hauptkategorie",
+    "difficulty": "Einfach/Mittel/Schwer",
+    "time_estimate": "ca. X Minuten",
+    "meal_type": "Frühstück/Mittagessen/Abendessen/Snack/Dessert"
+}
+Mögliche Tags: Vegan, Vegetarisch, Glutenfrei, Low-Carb, High-Protein, Schnell (<30min), Meal-Prep, Comfort Food, Asiatisch, Italienisch, Deutsch, Mexikanisch, Gesund, Süß, Herzhaft, One-Pot, Backen.
+Sprache: Deutsch. Nur relevante Tags vergeben."""
+
+    user_input = f"Titel: {recipe['title']}\nPortionen: {recipe['servings']}\nZutaten: {', '.join(recipe['ingredients'])}\nSchritte: {' '.join(recipe['steps'])}"
+
+    try:
+        raw = llm_query(prompt, user_input)
+        data = _parse_json_response(raw)
+        data["recipe_title"] = recipe["title"]
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Kategorisierung fehlgeschlagen: {e}")
+
+
+# ============================================================
+# Feature: Nährwerte schätzen
+# ============================================================
+
+@app.post("/nutrition")
+async def estimate_nutrition(request: NutritionRequest):
+    """Schätzt Nährwerte pro Portion basierend auf den Zutaten."""
+    prompt = """Du schätzt Nährwerte für ein Rezept basierend auf den Zutaten. Antworte NUR mit JSON:
+{
+    "per_serving": {
+        "calories": 450,
+        "protein_g": 25,
+        "carbs_g": 55,
+        "fat_g": 15,
+        "fiber_g": 5
+    },
+    "total": {
+        "calories": 1800,
+        "protein_g": 100,
+        "carbs_g": 220,
+        "fat_g": 60,
+        "fiber_g": 20
+    },
+    "health_score": "🟢 Gesund / 🟡 Okay / 🔴 Kalorienreich",
+    "notes": "Kurze Ernährungseinschätzung"
+}
+Werte sind Schätzungen basierend auf üblichen Mengen. Sprache: Deutsch."""
+
+    ingredients_text = "\n".join(f"- {ing}" for ing in request.ingredients)
+    user_input = f"Rezept: {request.title}\nPortionen: {request.servings}\nZutaten:\n{ingredients_text}"
+
+    try:
+        raw = llm_query(prompt, user_input)
+        data = _parse_json_response(raw)
+        data["title"] = request.title
+        # Formatierter Text
+        ps = data.get("per_serving", {})
+        data["formatted"] = (
+            f"📊 Nährwerte pro Portion ({request.servings}):\n"
+            f"  🔥 {ps.get('calories', '?')} kcal\n"
+            f"  💪 Protein: {ps.get('protein_g', '?')}g\n"
+            f"  🍞 Kohlenhydrate: {ps.get('carbs_g', '?')}g\n"
+            f"  🧈 Fett: {ps.get('fat_g', '?')}g\n"
+            f"  🌾 Ballaststoffe: {ps.get('fiber_g', '?')}g\n"
+            f"\n{data.get('health_score', '')}\n{data.get('notes', '')}"
+        )
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Nährwert-Schätzung fehlgeschlagen: {e}")
+
+
+# ============================================================
+# Feature: Wochenplan
+# ============================================================
+
+@app.post("/meal-plan")
+async def meal_plan(request: MealPlanRequest):
+    """Erstellt einen Wochenplan mit Rezeptvorschlägen + Gesamt-Einkaufsliste."""
+    prompt = f"""Erstelle einen Essensplan für {request.days} Tage. Antworte NUR mit JSON:
+{{
+    "days": [
+        {{"day": "Tag 1", "lunch": "Gericht", "dinner": "Gericht"}},
+        ...
+    ],
+    "shopping_list": {{
+        "🥬 Obst & Gemüse": ["Zutat 1 mit Menge", "..."],
+        "🥩 Fleisch & Fisch": ["..."],
+        "🧀 Milchprodukte": ["..."],
+        "🍝 Trockenwaren": ["..."],
+        "🛒 Sonstiges": ["..."]
+    }},
+    "total_estimated_cost": "ca. XX€"
+}}
+Regeln:
+- Abwechslungsreich, einfach nachzukochen
+- Zutaten die mehrfach vorkommen zusammenrechnen
+- Realistische Mengen für 2 Personen
+{f'- Präferenzen: {request.preferences}' if request.preferences else ''}
+Sprache: Deutsch."""
+
+    try:
+        raw = llm_query(prompt, f"Erstelle einen Plan für {request.days} Tage")
+        data = _parse_json_response(raw)
+
+        # Formatierter Text für Apple Notes
+        lines = [f"📅 Essensplan ({request.days} Tage)", ""]
+        for day in data.get("days", []):
+            lines.append(f"▸ {day.get('day', '?')}")
+            if day.get("lunch"):
+                lines.append(f"  🥗 Mittag: {day['lunch']}")
+            if day.get("dinner"):
+                lines.append(f"  🍽️ Abend: {day['dinner']}")
+            lines.append("")
+
+        lines.append("🛒 Gesamt-Einkaufsliste:")
+        for cat, items in data.get("shopping_list", {}).items():
+            lines.append(f"\n{cat}:")
+            for item in items:
+                lines.append(f"  ☐ {item}")
+
+        if data.get("total_estimated_cost"):
+            lines.append(f"\n💰 Geschätzte Kosten: {data['total_estimated_cost']}")
+
+        data["formatted_plan"] = "\n".join(lines)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Wochenplan fehlgeschlagen: {e}")
+
+
+# ============================================================
+# Feature: Rezept-Bild (Karte als HTML → Screenshot-fähig)
+# ============================================================
+
+@app.post("/recipe-card")
+async def recipe_card(request: VideoRequest):
+    """Gibt eine hübsche Rezeptkarte als HTML zurück."""
+    url = str(request.url)
+    cached = _cache_get(url)
+    if not cached:
+        raise HTTPException(status_code=400, detail="Bitte zuerst /extract aufrufen.")
+
+    r = cached
+    html = _generate_recipe_card_html(r)
+    return HTMLResponse(content=html)
+
+
+def _generate_recipe_card_html(r: dict) -> str:
+    """Generiert eine hübsche Rezeptkarte als HTML."""
+    ingredients_html = "".join(f"<li>{ing}</li>" for ing in r.get("ingredients", []))
+    steps_html = "".join(f"<li>{step}</li>" for step in r.get("steps", []))
+    tips_html = f'<div class="tips">💡 {r["tips"]}</div>' if r.get("tips") else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{r.get('title', 'Rezept')}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+         min-height: 100vh; display: flex; justify-content: center; padding: 20px; }}
+  .card {{ background: white; border-radius: 24px; max-width: 500px; width: 100%;
+           box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }}
+  .header {{ background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+             padding: 30px 24px; color: white; text-align: center; }}
+  .header h1 {{ font-size: 1.6em; margin-bottom: 8px; }}
+  .header .servings {{ opacity: 0.9; font-size: 1.1em; }}
+  .section {{ padding: 20px 24px; }}
+  .section h2 {{ font-size: 1.1em; color: #333; margin-bottom: 12px;
+                 padding-bottom: 8px; border-bottom: 2px solid #f093fb; }}
+  .ingredients ul {{ list-style: none; }}
+  .ingredients li {{ padding: 6px 0; border-bottom: 1px solid #f0f0f0; }}
+  .ingredients li::before {{ content: "•"; color: #f5576c; font-weight: bold; margin-right: 8px; }}
+  .steps ol {{ padding-left: 20px; }}
+  .steps li {{ padding: 8px 0; line-height: 1.5; color: #444; }}
+  .tips {{ background: #fff9e6; padding: 14px 18px; margin: 16px 24px;
+           border-radius: 12px; border-left: 4px solid #ffc107; font-size: 0.95em; }}
+  .footer {{ text-align: center; padding: 16px; color: #999; font-size: 0.8em; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <h1>🍳 {r.get('title', 'Rezept')}</h1>
+    <div class="servings">👥 {r.get('servings', '')}</div>
+  </div>
+  <div class="section ingredients">
+    <h2>📝 Zutaten</h2>
+    <ul>{ingredients_html}</ul>
+  </div>
+  <div class="section steps">
+    <h2>👨‍🍳 Zubereitung</h2>
+    <ol>{steps_html}</ol>
+  </div>
+  {tips_html}
+  <div class="footer">📱 {r.get('source_url', '')}</div>
+</div>
+</body>
+</html>"""
+
+
+# ============================================================
+# Feature: Web-Dashboard — alle gecachten Rezepte anzeigen
+# ============================================================
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Einfaches Web-Dashboard mit allen gespeicherten Rezepten."""
+    recipes = []
+    for key, (ts, data) in _cache.items():
+        recipes.append(data)
+
+    recipe_cards = ""
+    if not recipes:
+        recipe_cards = '<p class="empty">Noch keine Rezepte gespeichert. Teile ein Video über den Shortcut!</p>'
+    else:
+        for r in recipes:
+            tags_html = ""
+            ingredients_preview = ", ".join(r.get("ingredients", [])[:5])
+            recipe_cards += f"""
+            <div class="recipe-card" onclick="this.classList.toggle('expanded')">
+              <h2>🍳 {r.get('title', 'Unbekannt')}</h2>
+              <div class="meta">👥 {r.get('servings', '?')} · 📝 {len(r.get('ingredients', []))} Zutaten</div>
+              <div class="preview">{ingredients_preview}...</div>
+              <div class="details">
+                <h3>Zutaten:</h3>
+                <ul>{"".join(f"<li>{ing}</li>" for ing in r.get("ingredients", []))}</ul>
+                <h3>Zubereitung:</h3>
+                <ol>{"".join(f"<li>{s}</li>" for s in r.get("steps", []))}</ol>
+                {f'<p class="tips">💡 {r["tips"]}</p>' if r.get("tips") else ""}
+                <a href="{r.get('source_url', '#')}" target="_blank">📱 Original-Video</a>
+              </div>
+            </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🍳 Meine Rezepte</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f5f5f7; color: #333; }}
+  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+             color: white; padding: 40px 20px; text-align: center; }}
+  .header h1 {{ font-size: 2em; margin-bottom: 8px; }}
+  .header p {{ opacity: 0.8; }}
+  .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+  .stats {{ display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }}
+  .stat {{ background: white; border-radius: 16px; padding: 16px 20px;
+           flex: 1; min-width: 120px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+  .stat .number {{ font-size: 1.8em; font-weight: 700; color: #667eea; }}
+  .stat .label {{ font-size: 0.85em; color: #888; }}
+  .recipe-card {{ background: white; border-radius: 16px; padding: 20px; margin-bottom: 16px;
+                  box-shadow: 0 2px 8px rgba(0,0,0,0.08); cursor: pointer;
+                  transition: all 0.3s; }}
+  .recipe-card:hover {{ box-shadow: 0 4px 16px rgba(0,0,0,0.15); transform: translateY(-2px); }}
+  .recipe-card h2 {{ font-size: 1.2em; margin-bottom: 4px; }}
+  .recipe-card .meta {{ font-size: 0.85em; color: #888; margin-bottom: 8px; }}
+  .recipe-card .preview {{ color: #666; font-size: 0.9em; }}
+  .recipe-card .details {{ display: none; margin-top: 16px; border-top: 1px solid #eee; padding-top: 16px; }}
+  .recipe-card.expanded .details {{ display: block; }}
+  .recipe-card.expanded .preview {{ display: none; }}
+  .details h3 {{ font-size: 1em; margin: 12px 0 8px; color: #667eea; }}
+  .details ul, .details ol {{ padding-left: 20px; }}
+  .details li {{ padding: 4px 0; }}
+  .details .tips {{ background: #fff9e6; padding: 10px; border-radius: 8px; margin-top: 12px; }}
+  .details a {{ color: #667eea; text-decoration: none; display: inline-block; margin-top: 12px; }}
+  .empty {{ text-align: center; color: #888; padding: 60px 20px; font-size: 1.1em; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🍳 Meine Rezepte</h1>
+  <p>Alle Rezepte aus deinem Shortcut</p>
+</div>
+<div class="container">
+  <div class="stats">
+    <div class="stat"><div class="number">{len(recipes)}</div><div class="label">Rezepte</div></div>
+    <div class="stat"><div class="number">{sum(len(r.get('ingredients', [])) for r in recipes)}</div><div class="label">Zutaten gesamt</div></div>
+  </div>
+  {recipe_cards}
+</div>
+</body>
+</html>"""
+
+
+# ============================================================
+# Hilfsfunktion: JSON aus LLM-Antwort parsen
+# ============================================================
+
+def _parse_json_response(raw: str) -> dict:
+    """Parst JSON aus einer LLM-Antwort (mit Markdown-Cleanup)."""
+    import json
+    text = raw.strip()
+    if "```" in text:
+        lines = text.split("\n")
+        json_lines = []
+        inside = False
+        for line in lines:
+            if line.strip().startswith("```"):
+                inside = not inside
+                continue
+            if inside:
+                json_lines.append(line)
+        text = "\n".join(json_lines).strip()
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        text = text[start:end]
+    return json.loads(text)
 
 
 if __name__ == "__main__":
