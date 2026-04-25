@@ -121,8 +121,9 @@ class ScaleRequest(BaseModel):
 
 
 class ShoppingListRequest(BaseModel):
-    ingredients: list[str]
+    ingredients: list[str] = []
     title: str = ""
+    text: str = ""  # Rohtext aus einer Notiz (Alternative zu ingredients-Liste)
 
 
 class NutritionRequest(BaseModel):
@@ -470,8 +471,9 @@ async def list_styles():
 
 @app.post("/shopping-list")
 async def shopping_list(request: ShoppingListRequest):
-    """Erstellt eine kategorisierte Einkaufsliste aus Zutaten."""
+    """Erstellt eine kategorisierte Einkaufsliste. Akzeptiert entweder eine Zutaten-Liste ODER Rohtext aus einer Notiz."""
     prompt = """Du organisierst Zutaten als Einkaufsliste. Gruppiere nach Supermarkt-Abteilung.
+Falls du Rohtext bekommst (z.B. aus einer Rezept-Notiz kopiert), extrahiere zuerst die Zutaten daraus.
 Antworte NUR mit JSON:
 {
     "title": "Einkaufsliste für ...",
@@ -485,8 +487,14 @@ Antworte NUR mit JSON:
 }
 Leere Kategorien weglassen. Sprache: Deutsch."""
 
-    ingredients_text = "\n".join(f"- {ing}" for ing in request.ingredients)
-    user_input = f"Rezept: {request.title}\n\nZutaten:\n{ingredients_text}"
+    # Beide Eingabe-Varianten unterstützen
+    if request.text:
+        user_input = f"Erstelle eine Einkaufsliste aus folgendem Rezept-Text:\n\n{request.text}"
+    elif request.ingredients:
+        ingredients_text = "\n".join(f"- {ing}" for ing in request.ingredients)
+        user_input = f"Rezept: {request.title}\n\nZutaten:\n{ingredients_text}"
+    else:
+        raise HTTPException(status_code=400, detail="Entweder 'ingredients' (Liste) oder 'text' (Rohtext) muss angegeben werden.")
 
     try:
         raw = llm_query(prompt, user_input)
