@@ -719,10 +719,20 @@ Leere Kategorien weglassen. Sprache: Deutsch."""
             for item in cat["items"]:
                 all_items.append(f"{cat_name} {item}")
         data["items"] = all_items
+        data["items_text"] = "\n".join(all_items)
 
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Einkaufsliste fehlgeschlagen: {e}")
+
+
+@app.post("/shopping-list-simple")
+async def shopping_list_simple(request: ShoppingListRequest):
+    """Wie /shopping-list, aber gibt NUR eine flache Text-Liste zurück — optimiert für Apple Kurzbefehle."""
+    result = await shopping_list(request)
+    if isinstance(result, dict):
+        return result.get("items", [])
+    return []
 
 
 # ============================================================
