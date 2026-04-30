@@ -13,10 +13,10 @@ Der alte Endpoint bleibt erhalten:
 import os
 import asyncio
 import hashlib
-import tempfile
 import logging
 import time
 import uuid
+import threading
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
@@ -48,9 +48,11 @@ logger = logging.getLogger(__name__)
 # In-Memory Cache (max 100 Rezepte, 24h TTL)
 # ============================================================
 
-MAX_CACHE = 100
-CACHE_TTL = 86400  # 24 Stunden
+MAX_CACHE = int(os.getenv("MAX_CACHE", "100"))
+CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))  # 24 Stunden
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "60"))  # Sekunden
 _cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
+_cache_lock = threading.Lock()
 
 
 def _cache_key(url: str) -> str:
@@ -61,20 +63,22 @@ def _cache_key(url: str) -> str:
 
 def _cache_get(url: str) -> dict | None:
     key = _cache_key(url)
-    if key in _cache:
-        ts, data = _cache[key]
-        if time.time() - ts < CACHE_TTL:
-            logger.info(f"Cache HIT für {url[:60]}")
-            return data
-        del _cache[key]
+    with _cache_lock:
+        if key in _cache:
+            ts, data = _cache[key]
+            if time.time() - ts < CACHE_TTL:
+                logger.info(f"Cache HIT für {url[:60]}")
+                return data
+            del _cache[key]
     return None
 
 
 def _cache_set(url: str, data: dict):
     key = _cache_key(url)
-    _cache[key] = (time.time(), data)
-    while len(_cache) > MAX_CACHE:
-        _cache.popitem(last=False)
+    with _cache_lock:
+        _cache[key] = (time.time(), data)
+        while len(_cache) > MAX_CACHE:
+            _cache.popitem(last=False)
 
 
 # ============================================================
@@ -84,17 +88,19 @@ def _cache_set(url: str, data: dict):
 MAX_JOBS = 100
 JOB_TTL = 3600  # 1 Stunde
 _jobs: OrderedDict[str, dict] = OrderedDict()
+_jobs_lock = threading.Lock()
 
 
 def _jobs_cleanup():
     """Entfernt alte Jobs, damit der Speicher nicht wächst."""
-    now = time.time()
-    expired = [job_id for job_id, job in _jobs.items() if now - job.get("created_at", now) > JOB_TTL]
-    for job_id in expired:
-        _jobs.pop(job_id, None)
+    with _jobs_lock:
+        now = time.time()
+        expired = [job_id for job_id, job in _jobs.items() if now - job.get("created_at", now) > JOB_TTL]
+        for job_id in expired:
+            _jobs.pop(job_id, None)
 
-    while len(_jobs) > MAX_JOBS:
-        _jobs.popitem(last=False)
+        while len(_jobs) > MAX_JOBS:
+            _jobs.popitem(last=False)
 
 
 def _job_public(job: dict) -> dict:
@@ -152,9 +158,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recipe Extractor",
     description="Extrahiert Rezepte aus Instagram Reels & TikTok Videos",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
+
+MAX_REQUEST_TEXT_LEN = int(os.getenv("MAX_REQUEST_TEXT_LEN", "5000"))
 
 
 # ============================================================
@@ -325,22 +333,24 @@ async def extract_start(request: VideoRequest, background_tasks: BackgroundTasks
     job_id = uuid.uuid4().hex
 
     if cached:
+        with _jobs_lock:
+            _jobs[job_id] = {
+                "status": "done",
+                "result": cached,
+                "error": None,
+                "created_at": time.time(),
+                "url": url,
+            }
+        return {"job_id": job_id, "status": "done"}
+
+    with _jobs_lock:
         _jobs[job_id] = {
-            "status": "done",
-            "result": cached,
+            "status": "running",
+            "result": None,
             "error": None,
             "created_at": time.time(),
             "url": url,
         }
-        return {"job_id": job_id, "status": "done"}
-
-    _jobs[job_id] = {
-        "status": "running",
-        "result": None,
-        "error": None,
-        "created_at": time.time(),
-        "url": url,
-    }
 
     background_tasks.add_task(_run_extract_job, job_id, url)
     return {"job_id": job_id, "status": "running"}
@@ -351,7 +361,8 @@ async def extract_result(job_id: str):
     """Fragt Status oder Ergebnis eines laufenden Extract-Jobs ab."""
     _jobs_cleanup()
 
-    job = _jobs.get(job_id)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
     if not job:
         return {
             "status": "not_found",
@@ -366,22 +377,27 @@ def _run_extract_job(job_id: str, url: str):
     """Läuft im Hintergrund und speichert Ergebnis oder Fehler in _jobs."""
     try:
         recipe = _extract_recipe_sync(url)
-        _jobs[job_id] = {
-            "status": "done",
-            "result": recipe,
-            "error": None,
-            "created_at": _jobs.get(job_id, {}).get("created_at", time.time()),
-            "url": url,
-        }
+        with _jobs_lock:
+            _jobs[job_id] = {
+                "status": "done",
+                "result": recipe,
+                "error": None,
+                "created_at": _jobs.get(job_id, {}).get("created_at", time.time()),
+                "url": url,
+            }
     except Exception as e:
         logger.exception(f"Extract job failed: {e}")
-        _jobs[job_id] = {
-            "status": "error",
-            "result": None,
-            "error": str(e),
-            "created_at": _jobs.get(job_id, {}).get("created_at", time.time()),
-            "url": url,
-        }
+        error_detail = str(e)
+        if isinstance(e, HTTPException):
+            error_detail = e.detail
+        with _jobs_lock:
+            _jobs[job_id] = {
+                "status": "error",
+                "result": None,
+                "error": error_detail,
+                "created_at": _jobs.get(job_id, {}).get("created_at", time.time()),
+                "url": url,
+            }
 
 
 # ============================================================
@@ -436,8 +452,9 @@ def _extract_recipe_sync(url: str) -> dict:
         except Exception as e:
             logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
+    transcript = ""
+    ocr_text = ""
     try:
-        transcript = ""
         if subtitles:
             logger.info(f"Nutze Untertitel als Transkript ({len(subtitles)} Zeichen)")
             transcript = subtitles
@@ -447,7 +464,6 @@ def _extract_recipe_sync(url: str) -> dict:
             except Exception as e:
                 logger.warning(f"Transkription fehlgeschlagen: {e}")
 
-        ocr_text = ""
         if frames_dir:
             try:
                 ocr_text = extract_text_from_frames(frames_dir)
@@ -493,8 +509,12 @@ def _extract_recipe_sync(url: str) -> dict:
         return recipe
 
     finally:
+        # Cleanup temp files — safe because this runs AFTER transcription completes
         if audio_path and os.path.exists(audio_path):
-            os.remove(audio_path)
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
         cleanup_frames(frames_dir)
 
 
@@ -643,8 +663,15 @@ Antworte NUR mit JSON:
 }
 Leere Kategorien weglassen. Sprache: Deutsch."""
 
+    if request.text and request.ingredients:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitte entweder 'ingredients' (Liste) ODER 'text' (Rohtext) angeben, nicht beides.",
+        )
+
     if request.text:
-        user_input = f"Erstelle eine Einkaufsliste aus folgendem Rezept-Text:\n\n{request.text}"
+        text = request.text[:MAX_REQUEST_TEXT_LEN]
+        user_input = f"Erstelle eine Einkaufsliste aus folgendem Rezept-Text:\n\n{text}"
     elif request.ingredients:
         ingredients_text = "\n".join(f"- {ing}" for ing in request.ingredients)
         user_input = f"Rezept: {request.title}\n\nZutaten:\n{ingredients_text}"
@@ -808,6 +835,7 @@ Werte sind Schätzungen basierend auf üblichen Mengen. Sprache: Deutsch."""
 @app.post("/meal-plan")
 async def meal_plan(request: MealPlanRequest):
     """Erstellt einen Wochenplan mit Rezeptvorschlägen + Gesamt-Einkaufsliste."""
+    preferences = request.preferences[:MAX_REQUEST_TEXT_LEN] if request.preferences else ""
     prompt = f"""Erstelle einen Essensplan für {request.days} Tage. Antworte NUR mit JSON:
 {{
     "days": [
@@ -826,7 +854,7 @@ Regeln:
 - Abwechslungsreich, einfach nachzukochen
 - Zutaten die mehrfach vorkommen zusammenrechnen
 - Realistische Mengen für 2 Personen
-{f'- Präferenzen: {request.preferences}' if request.preferences else ''}
+{f'- Präferenzen: {preferences}' if preferences else ''}
 Sprache: Deutsch."""
 
     try:

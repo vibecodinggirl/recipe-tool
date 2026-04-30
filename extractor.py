@@ -10,8 +10,9 @@ Unterstützt mehrere Modi:
 import os
 import json
 import logging
-import subprocess
 import shutil
+import random
+import time
 
 import httpx
 
@@ -100,12 +101,23 @@ def transcribe_audio(audio_path: str) -> str:
     return _transcribe_local(audio_path)
 
 
+_whisper_model = None
+
+
+def _get_whisper_model():
+    """Lädt das Whisper-Modell einmalig und cached es."""
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        logger.info(f"Lade Whisper-Modell '{WHISPER_MODEL}' (einmalig)...")
+        _whisper_model = whisper.load_model(WHISPER_MODEL)
+    return _whisper_model
+
+
 def _transcribe_local(audio_path: str) -> str:
     """Transkribiert mit lokalem Whisper (openai-whisper Paket)."""
     logger.info(f"Transkribiere lokal mit Whisper ({WHISPER_MODEL}): {audio_path}")
-    import whisper
-
-    model = whisper.load_model(WHISPER_MODEL)
+    model = _get_whisper_model()
     result = model.transcribe(audio_path, language="de")
     transcript = result["text"]
     logger.info(f"Transkription ({len(transcript)} Zeichen): {transcript[:100]}...")
@@ -174,21 +186,26 @@ def _extract_ollama(transcript: str) -> str:
     """Extrahiert Rezept mit Ollama (lokales LLM)."""
     logger.info(f"Extrahiere Rezept mit Ollama ({OLLAMA_MODEL})...")
 
-    response = httpx.post(
-        f"{OLLAMA_URL}/api/generate",
-        json={
-            "model": OLLAMA_MODEL,
-            "prompt": f"{RECIPE_EXTRACTION_PROMPT}\n\n{transcript}",
-            "stream": False,
-            "options": {
-                "temperature": 0.3,
-                "num_predict": 2000,
+    try:
+        response = httpx.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": f"{RECIPE_EXTRACTION_PROMPT}\n\n{transcript}",
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "num_predict": 2000,
+                },
             },
-        },
-        timeout=120.0,
-    )
-    response.raise_for_status()
-    return response.json()["response"]
+            timeout=httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0),
+        )
+        response.raise_for_status()
+        return response.json()["response"]
+    except httpx.ConnectError:
+        raise RuntimeError(f"Ollama nicht erreichbar unter {OLLAMA_URL}. Läuft der Server?")
+    except httpx.TimeoutException:
+        raise RuntimeError("Ollama Timeout — Antwort hat zu lange gedauert.")
 
 
 FALLBACK_MODELS = [
@@ -200,11 +217,8 @@ FALLBACK_MODELS = [
 ]
 
 
-def _extract_openrouter(transcript: str) -> str:
-    """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry + Fallback-Modelle)."""
-    import time
-
-    # Baue Modellliste: Primärmodell zuerst, dann max. 2 Fallbacks
+def _openrouter_chat(system_prompt: str, user_input: str) -> str:
+    """Shared OpenRouter call with retry + fallback models + exponential backoff."""
     models_to_try = [OPENROUTER_MODEL]
     for m in FALLBACK_MODELS:
         if m not in models_to_try and len(models_to_try) < 3:
@@ -225,8 +239,8 @@ def _extract_openrouter(transcript: str) -> str:
                     json={
                         "model": model,
                         "messages": [
-                            {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
-                            {"role": "user", "content": transcript},
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_input},
                         ],
                         "temperature": 0.3,
                         "max_tokens": 2000,
@@ -234,23 +248,25 @@ def _extract_openrouter(transcript: str) -> str:
                     timeout=30.0,
                 )
             except httpx.TimeoutException:
-                logger.warning(f"Timeout bei {model} (Versuch {attempt + 1}/3)")
+                logger.warning(f"Timeout bei {model} (Versuch {attempt + 1}/2)")
                 last_error = f"Timeout bei Modell {model}"
                 continue
 
             logger.info(f"OpenRouter Response: status={response.status_code}")
 
             if response.status_code == 429:
-                try:
-                    body = response.json()
-                    logger.warning(f"Rate limit Details: {body}")
-                except Exception:
-                    logger.warning(f"Rate limit Body: {response.text[:200]}")
-                wait = 5 * (attempt + 1)
-                logger.warning(f"Rate limit bei {model}, warte {wait}s (Versuch {attempt + 1}/3)...")
+                # Exponential backoff with jitter
+                base_wait = min(2 ** (attempt + 1), 16)
+                jitter = random.uniform(0, base_wait * 0.5)
+                wait = base_wait + jitter
+                logger.warning(f"Rate limit bei {model}, warte {wait:.1f}s (Versuch {attempt + 1}/2)...")
                 time.sleep(wait)
                 last_error = f"Rate limit bei {model}"
                 continue
+
+            if response.status_code in (401, 403):
+                logger.error(f"Auth-Fehler bei OpenRouter (HTTP {response.status_code}) — API-Key prüfen!")
+                raise RuntimeError(f"OpenRouter Authentifizierung fehlgeschlagen (HTTP {response.status_code})")
 
             if response.status_code >= 400:
                 try:
@@ -282,48 +298,21 @@ def _extract_openrouter(transcript: str) -> str:
     raise RuntimeError(f"Alle OpenRouter Modelle fehlgeschlagen. Letzter Fehler: {last_error}")
 
 
+def _extract_openrouter(transcript: str) -> str:
+    """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry + Fallback-Modelle)."""
+    return _openrouter_chat(RECIPE_EXTRACTION_PROMPT, transcript)
+
+
 def _extract_groq(transcript: str) -> str:
     """Extrahiert Rezept mit Groq API (kostenlos)."""
     logger.info(f"Extrahiere Rezept mit Groq ({GROQ_LLM_MODEL})...")
-
-    response = httpx.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": GROQ_LLM_MODEL,
-            "messages": [
-                {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 2000,
-        },
-        timeout=60.0,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"].strip()
+    return _groq_chat(RECIPE_EXTRACTION_PROMPT, transcript)
 
 
 def _extract_api(transcript: str) -> str:
     """Extrahiert Rezept mit OpenAI GPT API."""
-    from openai import OpenAI
-
     logger.info("Extrahiere Rezept mit OpenAI GPT...")
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": RECIPE_EXTRACTION_PROMPT},
-            {"role": "user", "content": transcript},
-        ],
-        temperature=0.3,
-        max_tokens=2000,
-    )
-    return response.choices[0].message.content.strip()
+    return _api_chat(RECIPE_EXTRACTION_PROMPT, transcript)
 
 
 def _parse_recipe_json(raw_content: str) -> dict:
@@ -339,7 +328,7 @@ def _parse_recipe_json(raw_content: str) -> dict:
             if line.strip().startswith("```"):
                 inside = not inside
                 continue
-            if inside or not json_lines:
+            if inside:
                 json_lines.append(line)
         raw = "\n".join(json_lines).strip()
 
@@ -370,80 +359,73 @@ def _parse_recipe_json(raw_content: str) -> dict:
 def llm_query(system_prompt: str, user_input: str) -> str:
     """Generische LLM-Abfrage — nutzt den konfigurierten Modus (openrouter/groq/api/local)."""
     if MODE == "openrouter":
-        return _extract_openrouter_generic(system_prompt, user_input)
+        return _openrouter_chat(system_prompt, user_input)
     elif MODE == "groq":
-        return _extract_groq_generic(system_prompt, user_input)
+        return _groq_chat(system_prompt, user_input)
     elif MODE == "api":
-        return _extract_api_generic(system_prompt, user_input)
+        return _api_chat(system_prompt, user_input)
     else:
-        return _extract_ollama_generic(system_prompt, user_input)
+        return _ollama_chat(system_prompt, user_input)
 
 
-def _extract_openrouter_generic(system_prompt: str, user_input: str) -> str:
-    import time
-    models_to_try = [OPENROUTER_MODEL]
-    for m in FALLBACK_MODELS:
-        if m not in models_to_try and len(models_to_try) < 3:
-            models_to_try.append(m)
-    last_error = None
-    for model in models_to_try:
-        for attempt in range(2):
-            try:
-                response = httpx.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_input}], "temperature": 0.3, "max_tokens": 2000},
-                    timeout=30.0,
-                )
-            except httpx.TimeoutException:
-                last_error = f"Timeout bei {model}"
-                continue
-            if response.status_code == 429:
-                time.sleep(5 * (attempt + 1))
-                continue
-            if response.status_code >= 400:
-                last_error = f"HTTP {response.status_code}"
-                break
-            data = response.json()
-            if "error" in data:
-                break
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if content.strip():
-                return content.strip()
-            break
-    raise RuntimeError(f"LLM-Abfrage fehlgeschlagen: {last_error}")
-
-
-def _extract_groq_generic(system_prompt: str, user_input: str) -> str:
+def _groq_chat(system_prompt: str, user_input: str) -> str:
+    """Generische Groq-Abfrage."""
     response = httpx.post(
         "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": GROQ_LLM_MODEL, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_input}], "temperature": 0.3, "max_tokens": 2000},
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": GROQ_LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2000,
+        },
         timeout=60.0,
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"].strip()
 
 
-def _extract_api_generic(system_prompt: str, user_input: str) -> str:
+def _api_chat(system_prompt: str, user_input: str) -> str:
+    """Generische OpenAI-API-Abfrage."""
     from openai import OpenAI
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_input}],
-        temperature=0.3, max_tokens=2000,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ],
+        temperature=0.3,
+        max_tokens=2000,
     )
     return response.choices[0].message.content.strip()
 
 
-def _extract_ollama_generic(system_prompt: str, user_input: str) -> str:
-    response = httpx.post(
-        f"{OLLAMA_URL}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": f"{system_prompt}\n\n{user_input}", "stream": False, "options": {"temperature": 0.3, "num_predict": 2000}},
-        timeout=120.0,
-    )
-    response.raise_for_status()
-    return response.json()["response"]
+def _ollama_chat(system_prompt: str, user_input: str) -> str:
+    """Generische Ollama-Abfrage mit Connection-Timeout."""
+    try:
+        response = httpx.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": f"{system_prompt}\n\n{user_input}",
+                "stream": False,
+                "options": {"temperature": 0.3, "num_predict": 2000},
+            },
+            timeout=httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0),
+        )
+        response.raise_for_status()
+        return response.json()["response"]
+    except httpx.ConnectError:
+        raise RuntimeError(f"Ollama nicht erreichbar unter {OLLAMA_URL}. Läuft der Server?")
+    except httpx.TimeoutException:
+        raise RuntimeError("Ollama Timeout — Antwort hat zu lange gedauert.")
 
 
 def check_local_dependencies() -> dict:

@@ -23,6 +23,7 @@ ALLOWED_DOMAINS = [
 ]
 
 TMP_DIR = "tmp"
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "60"))
 
 
 def _validate_url(url: str) -> None:
@@ -323,9 +324,9 @@ def _download_audio(url: str, file_id: str) -> str:
     logger.info(f"Downloading audio from: {url}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=DOWNLOAD_TIMEOUT)
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Download-Timeout: Video ist zu groß oder Server antwortet nicht.")
+        raise RuntimeError(f"Download-Timeout ({DOWNLOAD_TIMEOUT}s): Video ist zu groß oder Server antwortet nicht.")
 
     if result.returncode != 0:
         error_msg = result.stderr.strip() if result.stderr else "Unbekannter Fehler"
