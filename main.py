@@ -1,6 +1,13 @@
 """
 Recipe Tool - Extrahiert Rezepte aus Instagram Reels & TikTok Videos
 und speichert sie in Apple Notizen via Apple Shortcut.
+
+Diese Version enthält zusätzlich Async-Job-Endpunkte für Apple Kurzbefehle:
+- POST /extract-start        -> startet Extraktion und gibt sofort job_id zurück
+- GET  /extract-result/{id}  -> fragt Ergebnis ab
+
+Der alte Endpoint bleibt erhalten:
+- POST /extract              -> blockierende Extraktion wie bisher
 """
 
 import os
@@ -9,16 +16,24 @@ import hashlib
 import tempfile
 import logging
 import time
+import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel, HttpUrl, Field
 from dotenv import load_dotenv
 
 from downloader import download_video_data, _download_audio
-from extractor import transcribe_audio, extract_recipe, build_extraction_input, check_local_dependencies, MODE, llm_query
+from extractor import (
+    transcribe_audio,
+    extract_recipe,
+    build_extraction_input,
+    check_local_dependencies,
+    MODE,
+    llm_query,
+)
 from ocr import extract_text_from_frames, cleanup_frames
 
 load_dotenv()
@@ -28,9 +43,11 @@ NOTE_STYLE = os.getenv("NOTE_STYLE", "classic")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 # ============================================================
 # In-Memory Cache (max 100 Rezepte, 24h TTL)
 # ============================================================
+
 MAX_CACHE = 100
 CACHE_TTL = 86400  # 24 Stunden
 _cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
@@ -61,20 +78,53 @@ def _cache_set(url: str, data: dict):
 
 
 # ============================================================
+# In-Memory Jobs für lange Video-Extraktion
+# ============================================================
+
+MAX_JOBS = 100
+JOB_TTL = 3600  # 1 Stunde
+_jobs: OrderedDict[str, dict] = OrderedDict()
+
+
+def _jobs_cleanup():
+    """Entfernt alte Jobs, damit der Speicher nicht wächst."""
+    now = time.time()
+    expired = [job_id for job_id, job in _jobs.items() if now - job.get("created_at", now) > JOB_TTL]
+    for job_id in expired:
+        _jobs.pop(job_id, None)
+
+    while len(_jobs) > MAX_JOBS:
+        _jobs.popitem(last=False)
+
+
+def _job_public(job: dict) -> dict:
+    """Entfernt interne Felder aus Job-Antworten."""
+    return {
+        "status": job.get("status"),
+        "result": job.get("result"),
+        "error": job.get("error"),
+    }
+
+
+# ============================================================
 # Keep-Alive (pingt sich selbst alle 10 Min → kein Cold Start)
 # ============================================================
+
 KEEP_ALIVE_INTERVAL = 600  # 10 Minuten
 
 
 async def _keep_alive_loop():
     """Pingt den eigenen /wake Endpoint um Render-Sleep zu verhindern."""
     import httpx
+
     render_url = os.getenv("RENDER_EXTERNAL_URL", "")
     if not render_url:
         logger.info("RENDER_EXTERNAL_URL nicht gesetzt — Keep-Alive deaktiviert")
         return
+
     wake_url = f"{render_url}/wake"
     logger.info(f"Keep-Alive aktiv: Pinge {wake_url} alle {KEEP_ALIVE_INTERVAL}s")
+
     while True:
         await asyncio.sleep(KEEP_ALIVE_INTERVAL)
         try:
@@ -87,12 +137,11 @@ async def _keep_alive_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     os.makedirs("tmp", exist_ok=True)
     keep_alive_task = asyncio.create_task(_keep_alive_loop())
     yield
-    # Shutdown
     keep_alive_task.cancel()
+
     for f in os.listdir("tmp"):
         try:
             os.remove(os.path.join("tmp", f))
@@ -103,10 +152,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recipe Extractor",
     description="Extrahiert Rezepte aus Instagram Reels & TikTok Videos",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
+
+# ============================================================
+# Request / Response Models
+# ============================================================
 
 class VideoRequest(BaseModel):
     url: HttpUrl
@@ -123,7 +176,7 @@ class ScaleRequest(BaseModel):
 class ShoppingListRequest(BaseModel):
     ingredients: list[str] = []
     title: str = ""
-    text: str = ""  # Rohtext aus einer Notiz (Alternative zu ingredients-Liste)
+    text: str = ""
 
 
 class NutritionRequest(BaseModel):
@@ -147,6 +200,10 @@ class RecipeResponse(BaseModel):
     formatted_note: str
 
 
+# ============================================================
+# Basic Endpoints
+# ============================================================
+
 @app.get("/health")
 async def health():
     info = {"status": "ok", "mode": MODE}
@@ -157,14 +214,21 @@ async def health():
 
 @app.get("/wake")
 async def wake():
-    """Leichtgewichtiger Endpoint zum Aufwecken des Servers (Render Cold Start)."""
+    """Leichtgewichtiger Endpoint zum Aufwecken des Servers."""
     return {"status": "awake"}
 
 
 @app.get("/cache/stats")
 async def cache_stats():
     """Zeigt Cache-Statistiken."""
-    return {"cached_recipes": len(_cache), "max_cache": MAX_CACHE, "ttl_seconds": CACHE_TTL}
+    return {
+        "cached_recipes": len(_cache),
+        "max_cache": MAX_CACHE,
+        "ttl_seconds": CACHE_TTL,
+        "jobs": len(_jobs),
+        "max_jobs": MAX_JOBS,
+        "job_ttl_seconds": JOB_TTL,
+    }
 
 
 @app.exception_handler(HTTPException)
@@ -181,6 +245,10 @@ async def friendly_error_handler(request: Request, exc: HTTPException):
         content={"detail": exc.detail, "error_message": friendly},
     )
 
+
+# ============================================================
+# Debug Endpoint
+# ============================================================
 
 @app.post("/debug")
 async def debug_endpoint(request: VideoRequest):
@@ -201,10 +269,10 @@ async def debug_endpoint(request: VideoRequest):
     except Exception as e:
         result["steps"]["download"] = f"FEHLER: {str(e)}"
 
-    # oEmbed Test (mit URL-Auflösung)
     import httpx
     from urllib.parse import quote
     from downloader import _resolve_short_url
+
     try:
         resolved_url = _resolve_short_url(url)
         result["resolved_url"] = resolved_url
@@ -214,10 +282,16 @@ async def debug_endpoint(request: VideoRequest):
         else:
             encoded = quote(resolved_url, safe="")
             oembed_url = f"https://graph.facebook.com/v18.0/instagram_oembed?url={encoded}&omitscript=true"
-        r = httpx.get(oembed_url, follow_redirects=True, timeout=10.0,
-                      headers={"User-Agent": "Mozilla/5.0"})
+
+        r = httpx.get(
+            oembed_url,
+            follow_redirects=True,
+            timeout=10.0,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
         result["oembed_status"] = r.status_code
         result["oembed_url"] = oembed_url
+
         if r.status_code == 200:
             try:
                 data = r.json()
@@ -234,22 +308,104 @@ async def debug_endpoint(request: VideoRequest):
     return result
 
 
+# ============================================================
+# Rezept-Extraktion: neue Async-Job-Endpunkte
+# ============================================================
+
+@app.post("/extract-start")
+async def extract_start(request: VideoRequest, background_tasks: BackgroundTasks):
+    """
+    Startet die lange Rezept-Extraktion im Hintergrund.
+    Dieser Endpoint antwortet sofort, damit Apple Kurzbefehle nicht timeoutet.
+    """
+    _jobs_cleanup()
+
+    url = str(request.url)
+    cached = _cache_get(url)
+    job_id = uuid.uuid4().hex
+
+    if cached:
+        _jobs[job_id] = {
+            "status": "done",
+            "result": cached,
+            "error": None,
+            "created_at": time.time(),
+            "url": url,
+        }
+        return {"job_id": job_id, "status": "done"}
+
+    _jobs[job_id] = {
+        "status": "running",
+        "result": None,
+        "error": None,
+        "created_at": time.time(),
+        "url": url,
+    }
+
+    background_tasks.add_task(_run_extract_job, job_id, url)
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/extract-result/{job_id}")
+async def extract_result(job_id: str):
+    """Fragt Status oder Ergebnis eines laufenden Extract-Jobs ab."""
+    _jobs_cleanup()
+
+    job = _jobs.get(job_id)
+    if not job:
+        return {
+            "status": "not_found",
+            "result": None,
+            "error": "Job nicht gefunden. Eventuell wurde der Server neu gestartet oder der Job ist abgelaufen.",
+        }
+
+    return _job_public(job)
+
+
+def _run_extract_job(job_id: str, url: str):
+    """Läuft im Hintergrund und speichert Ergebnis oder Fehler in _jobs."""
+    try:
+        recipe = _extract_recipe_sync(url)
+        _jobs[job_id] = {
+            "status": "done",
+            "result": recipe,
+            "error": None,
+            "created_at": _jobs.get(job_id, {}).get("created_at", time.time()),
+            "url": url,
+        }
+    except Exception as e:
+        logger.exception(f"Extract job failed: {e}")
+        _jobs[job_id] = {
+            "status": "error",
+            "result": None,
+            "error": str(e),
+            "created_at": _jobs.get(job_id, {}).get("created_at", time.time()),
+            "url": url,
+        }
+
+
+# ============================================================
+# Rezept-Extraktion: alte blockierende Route bleibt erhalten
+# ============================================================
+
 @app.post("/extract", response_model=RecipeResponse)
 async def extract_recipe_endpoint(request: VideoRequest):
+    """Alte blockierende Extraktion. Für Apple Shortcut besser /extract-start nutzen."""
+    recipe = _extract_recipe_sync(str(request.url))
+    return RecipeResponse(**recipe)
+
+
+def _extract_recipe_sync(url: str) -> dict:
     """
-    Zwei-Pass-Extraktion:
-    1. Schnell: Nur Caption/Metadaten holen (fast_mode)
-    2. Falls zu wenig Daten: Audio runterladen + Groq Whisper Transkription
+    Eigentliche Rezept-Extraktion als normale Funktion.
+    Wird von /extract und vom Hintergrundjob verwendet.
     """
-    url = str(request.url)
     logger.info(f"Processing URL: {url}")
 
-    # ===== CACHE CHECK =====
     cached = _cache_get(url)
     if cached:
-        return RecipeResponse(**cached)
+        return cached
 
-    # ===== PASS 1: Schnell — nur Caption/Metadaten ====="
     try:
         video_data = download_video_data(url, fast_mode=True)
     except Exception as e:
@@ -259,21 +415,21 @@ async def extract_recipe_endpoint(request: VideoRequest):
     caption = video_data.get("caption", "")
     title = video_data.get("title", "")
     subtitles = video_data.get("subtitles", "")
-    audio_path = video_data["audio_path"]
-    frames_dir = video_data["frames_dir"]
+    audio_path = video_data.get("audio_path")
+    frames_dir = video_data.get("frames_dir")
 
-    # Prüfen ob Caption genug hergibt
     total_text = len(caption) + len(subtitles)
     generic_titles = ("TikTok - Make Your Day", "TikTok", "")
     title_useful = title not in generic_titles
-
     has_enough_caption = total_text >= 50 or title_useful
-    logger.info(f"Pass 1: Caption={len(caption)}z, Subs={len(subtitles)}z, Title='{title[:50]}', genug={has_enough_caption}")
 
-    # ===== PASS 2: Audio-Fallback wenn Caption zu kurz =====
+    logger.info(
+        f"Pass 1: Caption={len(caption)}z, Subs={len(subtitles)}z, "
+        f"Title='{title[:50]}', genug={has_enough_caption}"
+    )
+
     if not has_enough_caption:
         logger.info("Caption zu kurz — versuche Audio-Download + Transkription...")
-        import uuid
         file_id = uuid.uuid4().hex[:12]
         try:
             audio_path = _download_audio(url, file_id)
@@ -281,7 +437,6 @@ async def extract_recipe_endpoint(request: VideoRequest):
             logger.warning(f"Audio-Download fehlgeschlagen: {e}")
 
     try:
-        # Transkription
         transcript = ""
         if subtitles:
             logger.info(f"Nutze Untertitel als Transkript ({len(subtitles)} Zeichen)")
@@ -292,7 +447,6 @@ async def extract_recipe_endpoint(request: VideoRequest):
             except Exception as e:
                 logger.warning(f"Transkription fehlgeschlagen: {e}")
 
-        # OCR
         ocr_text = ""
         if frames_dir:
             try:
@@ -300,14 +454,19 @@ async def extract_recipe_endpoint(request: VideoRequest):
             except Exception as e:
                 logger.warning(f"OCR fehlgeschlagen: {e}")
 
-        logger.info(f"Quellen: Audio={len(transcript)}z, Caption={len(caption)}z, OCR={len(ocr_text)}z, Titel={len(title)}z")
+        logger.info(
+            f"Quellen: Audio={len(transcript)}z, Caption={len(caption)}z, "
+            f"OCR={len(ocr_text)}z, Titel={len(title)}z"
+        )
 
-        # Finaler Check: genug Daten?
         total_content = len(transcript) + len(caption) + len(ocr_text)
         if total_content < 50 and not title_useful:
             raise HTTPException(
                 status_code=422,
-                detail="Konnte kein Rezept finden — weder in der Beschreibung noch im Audio. Funktioniert am besten bei Videos wo das Rezept im Text steht."
+                detail=(
+                    "Konnte kein Rezept finden — weder in der Beschreibung noch im Audio. "
+                    "Funktioniert am besten bei Videos wo das Rezept im Text steht."
+                ),
             )
 
         try:
@@ -320,7 +479,6 @@ async def extract_recipe_endpoint(request: VideoRequest):
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-        # Rezept extrahieren
         logger.info("Extracting recipe...")
         try:
             recipe = extract_recipe(combined_input, url)
@@ -331,10 +489,8 @@ async def extract_recipe_endpoint(request: VideoRequest):
         formatted = format_for_apple_notes(recipe)
         recipe["formatted_note"] = formatted
 
-        # Im Cache speichern
         _cache_set(url, recipe)
-
-        return RecipeResponse(**recipe)
+        return recipe
 
     finally:
         if audio_path and os.path.exists(audio_path):
@@ -461,7 +617,7 @@ async def list_styles():
             "minimal": {"description": "Nur Text, kein Schnickschnack", "preview": _format_minimal(example)},
             "card": {"description": "Rezeptkarte mit Rahmen", "preview": _format_card(example)},
             "checklist": {"description": "Zum Abhaken beim Kochen & Einkaufen", "preview": _format_checklist(example)},
-        }
+        },
     }
 
 
@@ -487,19 +643,21 @@ Antworte NUR mit JSON:
 }
 Leere Kategorien weglassen. Sprache: Deutsch."""
 
-    # Beide Eingabe-Varianten unterstützen
     if request.text:
         user_input = f"Erstelle eine Einkaufsliste aus folgendem Rezept-Text:\n\n{request.text}"
     elif request.ingredients:
         ingredients_text = "\n".join(f"- {ing}" for ing in request.ingredients)
         user_input = f"Rezept: {request.title}\n\nZutaten:\n{ingredients_text}"
     else:
-        raise HTTPException(status_code=400, detail="Entweder 'ingredients' (Liste) oder 'text' (Rohtext) muss angegeben werden.")
+        raise HTTPException(
+            status_code=400,
+            detail="Entweder 'ingredients' (Liste) oder 'text' (Rohtext) muss angegeben werden.",
+        )
 
     try:
         raw = llm_query(prompt, user_input)
         data = _parse_json_response(raw)
-        # Formatiere als Text für Apple Notes
+
         lines = [f"🛒 {data.get('title', 'Einkaufsliste')}"]
         for cat in data.get("categories", []):
             lines.append(f"\n{cat['name']}:")
@@ -507,7 +665,6 @@ Leere Kategorien weglassen. Sprache: Deutsch."""
                 lines.append(f"  ☐ {item}")
         data["formatted_list"] = "\n".join(lines)
 
-        # Flache Liste aller Items für Apple Erinnerungen (jede Zutat = eine Erinnerung)
         all_items = []
         for cat in data.get("categories", []):
             cat_name = cat["name"]
@@ -562,10 +719,8 @@ async def categorize_recipe(request: VideoRequest):
     """Extrahiert Rezept UND vergibt automatisch Kategorie-Tags."""
     url = str(request.url)
 
-    # Zuerst das normale Rezept holen (nutzt Cache wenn vorhanden)
     cached = _cache_get(url)
     if not cached:
-        # Rezept normal extrahieren — extract aufrufen wäre zirkulär, also direkt Daten holen
         raise HTTPException(status_code=400, detail="Bitte zuerst /extract aufrufen, dann /categorize mit derselben URL.")
 
     recipe = cached
@@ -580,7 +735,12 @@ async def categorize_recipe(request: VideoRequest):
 Mögliche Tags: Vegan, Vegetarisch, Glutenfrei, Low-Carb, High-Protein, Schnell (<30min), Meal-Prep, Comfort Food, Asiatisch, Italienisch, Deutsch, Mexikanisch, Gesund, Süß, Herzhaft, One-Pot, Backen.
 Sprache: Deutsch. Nur relevante Tags vergeben."""
 
-    user_input = f"Titel: {recipe['title']}\nPortionen: {recipe['servings']}\nZutaten: {', '.join(recipe['ingredients'])}\nSchritte: {' '.join(recipe['steps'])}"
+    user_input = (
+        f"Titel: {recipe['title']}\n"
+        f"Portionen: {recipe['servings']}\n"
+        f"Zutaten: {', '.join(recipe['ingredients'])}\n"
+        f"Schritte: {' '.join(recipe['steps'])}"
+    )
 
     try:
         raw = llm_query(prompt, user_input)
@@ -626,7 +786,6 @@ Werte sind Schätzungen basierend auf üblichen Mengen. Sprache: Deutsch."""
         raw = llm_query(prompt, user_input)
         data = _parse_json_response(raw)
         data["title"] = request.title
-        # Formatierter Text
         ps = data.get("per_serving", {})
         data["formatted"] = (
             f"📊 Nährwerte pro Portion ({request.servings}):\n"
@@ -652,11 +811,10 @@ async def meal_plan(request: MealPlanRequest):
     prompt = f"""Erstelle einen Essensplan für {request.days} Tage. Antworte NUR mit JSON:
 {{
     "days": [
-        {{"day": "Tag 1", "lunch": "Gericht", "dinner": "Gericht"}},
-        ...
+        {{"day": "Tag 1", "lunch": "Gericht", "dinner": "Gericht"}}
     ],
     "shopping_list": {{
-        "🥬 Obst & Gemüse": ["Zutat 1 mit Menge", "..."],
+        "🥬 Obst & Gemüse": ["Zutat 1 mit Menge"],
         "🥩 Fleisch & Fisch": ["..."],
         "🧀 Milchprodukte": ["..."],
         "🍝 Trockenwaren": ["..."],
@@ -675,7 +833,6 @@ Sprache: Deutsch."""
         raw = llm_query(prompt, f"Erstelle einen Plan für {request.days} Tage")
         data = _parse_json_response(raw)
 
-        # Formatierter Text für Apple Notes
         lines = [f"📅 Essensplan ({request.days} Tage)", ""]
         for day in data.get("days", []):
             lines.append(f"▸ {day.get('day', '?')}")
@@ -790,7 +947,6 @@ async def dashboard():
         recipe_cards = '<p class="empty">Noch keine Rezepte gespeichert. Teile ein Video über den Shortcut!</p>'
     else:
         for r in recipes:
-            tags_html = ""
             ingredients_preview = ", ".join(r.get("ingredients", [])[:5])
             recipe_cards += f"""
             <div class="recipe-card" onclick="this.classList.toggle('expanded')">
@@ -866,9 +1022,11 @@ async def dashboard():
 # ============================================================
 
 def _parse_json_response(raw: str) -> dict:
-    """Parst JSON aus einer LLM-Antwort (mit Markdown-Cleanup)."""
+    """Parst JSON aus einer LLM-Antwort mit Markdown-Cleanup."""
     import json
+
     text = raw.strip()
+
     if "```" in text:
         lines = text.split("\n")
         json_lines = []
@@ -880,13 +1038,16 @@ def _parse_json_response(raw: str) -> dict:
             if inside:
                 json_lines.append(line)
         text = "\n".join(json_lines).strip()
+
     start = text.find("{")
     end = text.rfind("}") + 1
     if start != -1 and end > start:
         text = text[start:end]
+
     return json.loads(text)
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
