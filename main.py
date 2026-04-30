@@ -373,6 +373,27 @@ async def extract_result(job_id: str):
     return _job_public(job)
 
 
+@app.get("/extract-wait/{job_id}")
+async def extract_wait(job_id: str):
+    """Wartet bis zu 55 Sekunden auf das Ergebnis. Kein Polling nötig."""
+    _jobs_cleanup()
+
+    for _ in range(55):
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if not job:
+            return {
+                "status": "not_found",
+                "result": None,
+                "error": "Job nicht gefunden.",
+            }
+        if job.get("status") in ("done", "error"):
+            return _job_public(job)
+        await asyncio.sleep(1)
+
+    return _job_public(job)
+
+
 def _run_extract_job(job_id: str, url: str):
     """Läuft im Hintergrund und speichert Ergebnis oder Fehler in _jobs."""
     try:
