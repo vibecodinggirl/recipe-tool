@@ -207,6 +207,39 @@ So machst du den Kurzbefehl im Share Sheet verfügbar:
 
 ## 🛒 Shortcut: Smarte Einkaufsliste (Video + Notiz)
 
+### Empfohlen für Apple Erinnerungen: Vorhandene Zutaten aussortieren
+
+Diese Variante schreibt jede fehlende Zutat einzeln in die intelligente Apple-Liste
+**„Einkaufsliste“**. Apple übernimmt dort die automatische Kategorisierung.
+
+Nachdem das Rezept extrahiert wurde und die Variablen `titel` und `zutaten`
+vorliegen, verwende diese Aktionen:
+
+1. **„Inhalte von URL abrufen“**
+   - URL: `https://recipe-tool-redo.onrender.com/shopping-list-reminders`
+   - Methode: **POST**, Inhalt: **JSON**
+   - `title` = `titel`
+   - `ingredients` = `zutaten`
+2. **„Aus Liste auswählen“**
+   - Liste: Ergebnis der vorherigen Aktion
+   - Frage: `Was hast du schon zu Hause?`
+   - **Mehrfachauswahl erlauben** aktivieren
+3. Speichere die Auswahl als Variable `vorhanden`.
+4. **„Inhalte von URL abrufen“**
+   - URL: `https://recipe-tool-redo.onrender.com/shopping-list-filter`
+   - Methode: **POST**, Inhalt: **JSON**
+   - `items` = Ergebnis aus Schritt 1
+   - `available` = Variable `vorhanden`
+5. **„Wert aus Wörterbuch abrufen“** mit Schlüssel `items`.
+6. **„Mit jedem Objekt wiederholen“**.
+7. Innerhalb der Wiederholung: **„Neue Erinnerung hinzufügen“**
+   - Titel: `Wiederholungsobjekt`
+   - Liste: **Einkaufsliste**
+
+Damit erscheinen zuerst alle erkannten Zutaten zur Auswahl. Alles, was du als
+bereits vorhanden markierst, wird entfernt; nur der Rest landet in Apple
+Erinnerungen. Die Server-Kategorien werden bewusst nicht in den Titel geschrieben.
+
 **Ein Shortcut für alles:** Erkennt automatisch ob du einen TikTok/Instagram-Link oder Rezepttext teilst und erstellt daraus eine kategorisierte Einkaufsliste.
 
 **Kurzbefehle-App → + → Name: „Einkaufsliste"**

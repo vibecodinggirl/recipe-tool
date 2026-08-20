@@ -194,6 +194,7 @@ recipe_tool/
 - Caption-, Untertitel- und optional OCR-Auswertung
 - Apple-Notizen-Formatierung in vier Stilen
 - Einkaufsliste, Portionsumrechnung, Kategorien und Nährwertschätzung
+- Vorratsauswahl vor dem Übertragen in Apples intelligente Einkaufsliste
 - Essensplan, HTML-Rezeptkarte und lokales Rezept-Dashboard
 - In-Memory-Cache mit Ablaufzeit sowie Job-Verwaltung
 

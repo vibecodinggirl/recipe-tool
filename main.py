@@ -194,6 +194,11 @@ class ShoppingListRequest(BaseModel):
     text: str = ""
 
 
+class ShoppingListFilterRequest(BaseModel):
+    items: list[str] = Field(min_length=1)
+    available: list[str] = Field(default_factory=list)
+
+
 class NutritionRequest(BaseModel):
     title: str
     ingredients: list[str]
@@ -734,12 +739,15 @@ Leere Kategorien weglassen. Sprache: Deutsch."""
         data["formatted_list"] = "\n".join(lines)
 
         all_items = []
+        reminder_items = []
         for cat in data.get("categories", []):
             cat_name = cat["name"]
             for item in cat["items"]:
                 all_items.append(f"{cat_name} {item}")
+                reminder_items.append(item)
         data["items"] = all_items
         data["items_text"] = "\n".join(all_items)
+        data["reminder_items"] = reminder_items
 
         return data
     except Exception as e:
@@ -753,6 +761,25 @@ async def shopping_list_simple(request: ShoppingListRequest):
     if isinstance(result, dict):
         return result.get("items", [])
     return []
+
+
+@app.post("/shopping-list-reminders")
+async def shopping_list_reminders(request: ShoppingListRequest):
+    """Gibt saubere Einträge für Apples automatisch kategorisierte Einkaufsliste zurück."""
+    result = await shopping_list(request)
+    return result.get("reminder_items", []) if isinstance(result, dict) else []
+
+
+@app.post("/shopping-list-filter")
+async def shopping_list_filter(request: ShoppingListFilterRequest):
+    """Entfernt die vom Nutzer als vorhanden markierten Zutaten aus der Einkaufsliste."""
+    available = set(request.available)
+    remaining = [item for item in request.items if item not in available]
+    return {
+        "items": remaining,
+        "items_text": "\n".join(remaining),
+        "removed_count": len(request.items) - len(remaining),
+    }
 
 
 # ============================================================

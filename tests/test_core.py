@@ -201,3 +201,26 @@ def test_docker_image_copies_all_local_runtime_modules():
                     pending_files.append(candidate)
 
     assert runtime_files <= copied_files, f"Im Docker-Image fehlen: {sorted(runtime_files - copied_files)}"
+
+
+def test_shopping_filter_removes_available_items_and_preserves_order():
+    request = main.ShoppingListFilterRequest(
+        items=["200 g Nudeln", "2 Eier", "1 Zitrone"],
+        available=["2 Eier"],
+    )
+    result = asyncio.run(main.shopping_list_filter(request))
+    assert result == {
+        "items": ["200 g Nudeln", "1 Zitrone"],
+        "items_text": "200 g Nudeln\n1 Zitrone",
+        "removed_count": 1,
+    }
+
+
+def test_shopping_filter_handles_no_available_items():
+    request = main.ShoppingListFilterRequest(items=["Milch"], available=[])
+    assert asyncio.run(main.shopping_list_filter(request))["items"] == ["Milch"]
+
+
+def test_shopping_filter_requires_candidate_items():
+    with pytest.raises(ValueError):
+        main.ShoppingListFilterRequest(items=[])
