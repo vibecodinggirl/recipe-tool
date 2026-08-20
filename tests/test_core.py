@@ -252,3 +252,53 @@ def test_grocery_wait_returns_ingredients_without_dictionary_steps():
 def test_grocery_wait_reports_missing_job():
     response = client.get("/grocery-wait/unknown")
     assert response.status_code == 404
+
+
+def test_normalize_grocery_items_cleans_and_deduplicates():
+    result = main._normalize_grocery_items(
+        ["  • 2 Eier  ", "2  Eier", "- 500 g Mehl", None, ""]
+    )
+    assert result == ["2 Eier", "500 g Mehl"]
+
+
+def test_normalize_grocery_items_requires_a_list():
+    with pytest.raises(ValueError, match="Zutatenliste"):
+        main._normalize_grocery_items("2 Eier")
+
+
+def test_smart_grocery_list_combines_recipes_and_scaling(monkeypatch):
+    captured = {}
+
+    def fake_llm_query(prompt, user_input):
+        captured["prompt"] = prompt
+        captured["user_input"] = user_input
+        return '{"items": ["5 Eier", "500 g Mehl", "5  Eier"]}'
+
+    monkeypatch.setattr(main, "llm_query", fake_llm_query)
+    response = client.post(
+        "/smart-grocery-list",
+        json={
+            "recipes": ["Rezept A: 2 Eier", "Rezept B: 3 Eier und Mehl"],
+            "target_servings": 4,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": ["5 Eier", "500 g Mehl"],
+        "items_text": "5 Eier\n500 g Mehl",
+        "recipe_count": 2,
+        "target_servings": 4,
+    }
+    assert "4 Portionen" in captured["prompt"]
+    assert "REZEPT 1" in captured["user_input"]
+    assert "REZEPT 2" in captured["user_input"]
+
+
+def test_smart_grocery_list_rejects_empty_recipe_text():
+    response = client.post("/smart-grocery-list", json={"recipes": ["   "]})
+    assert response.status_code == 400
+
+
+def test_smart_grocery_list_limits_recipe_count():
+    response = client.post("/smart-grocery-list", json={"recipes": ["Rezept"] * 11})
+    assert response.status_code == 422

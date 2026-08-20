@@ -23,6 +23,7 @@ import uuid
 import threading
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
@@ -165,7 +166,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recipe Extractor",
     description="Extrahiert Rezepte aus Instagram Reels & TikTok Videos",
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
@@ -197,6 +198,11 @@ class ShoppingListRequest(BaseModel):
 class ShoppingListFilterRequest(BaseModel):
     items: list[str] = Field(min_length=1)
     available: list[str] = Field(default_factory=list)
+
+
+class SmartGroceryRequest(BaseModel):
+    recipes: list[str] = Field(min_length=1, max_length=10)
+    target_servings: Optional[int] = Field(default=None, ge=1, le=50)
 
 
 class NutritionRequest(BaseModel):
@@ -801,6 +807,74 @@ async def shopping_list_filter(request: ShoppingListFilterRequest):
         "items_text": "\n".join(remaining),
         "removed_count": len(request.items) - len(remaining),
     }
+
+
+@app.post("/smart-grocery-list")
+async def smart_grocery_list(request: SmartGroceryRequest):
+    """Kombiniert, bereinigt und skaliert Zutaten aus bis zu zehn Rezept-Notizen."""
+    recipes = [text.strip() for text in request.recipes if text.strip()]
+    if not recipes:
+        raise HTTPException(status_code=400, detail="Mindestens eine Rezept-Notiz muss Text enthalten.")
+
+    combined_text = "\n\n".join(
+        f"=== REZEPT {index} ===\n{text[:MAX_REQUEST_TEXT_LEN]}"
+        for index, text in enumerate(recipes, 1)
+    )
+    combined_text = combined_text[: MAX_REQUEST_TEXT_LEN * 3]
+    scaling_rule = (
+        f"Skaliere jedes Rezept zuerst auf {request.target_servings} Portionen."
+        if request.target_servings
+        else "Behalte die in den Rezepten angegebenen Portionen und Mengen bei."
+    )
+    prompt = f"""Du erstellst eine gemeinsame Einkaufsliste aus einer oder mehreren Rezept-Notizen.
+
+Aufgaben:
+1. Extrahiere ausschließlich echte Zutaten, keine Überschriften, Tipps oder Zubereitungsschritte.
+2. {scaling_rule}
+3. Vereinheitliche gleichbedeutende Schreibweisen und Einheiten.
+4. Führe doppelte Zutaten zusammen und addiere kompatible Mengen.
+5. Vermische unvereinbare Einheiten nicht; behalte sie dann als getrennte Einträge.
+6. Behalte notwendige Mengen und kurze Spezifikationen bei.
+
+Antworte NUR mit JSON:
+{{"items": ["Menge Zutat", "Menge Zutat"]}}
+
+Sprache: Deutsch. Keine Kategorien oder Emojis."""
+
+    try:
+        raw = await run_in_threadpool(llm_query, prompt, combined_text)
+        data = _parse_json_response(raw)
+        items = _normalize_grocery_items(data.get("items", []))
+        if not items:
+            raise ValueError("Keine Zutaten erkannt.")
+        return {
+            "items": items,
+            "items_text": "\n".join(items),
+            "recipe_count": len(recipes),
+            "target_servings": request.target_servings,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Einkaufsliste konnte nicht erstellt werden: {exc}")
+
+
+def _normalize_grocery_items(items: object) -> list[str]:
+    """Bereinigt Modell-Ausgaben und entfernt exakte Duplikate ohne Reihenfolgeverlust."""
+    if not isinstance(items, list):
+        raise ValueError("Die KI-Antwort enthält keine Zutatenliste.")
+
+    normalized = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        clean = " ".join(item.strip().lstrip("-•☐ ").split())
+        key = clean.casefold()
+        if clean and key not in seen:
+            seen.add(key)
+            normalized.append(clean)
+    return normalized
 
 
 # ============================================================

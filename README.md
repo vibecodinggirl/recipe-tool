@@ -135,6 +135,25 @@ nur „Inhalte von URL abrufen“ und „Notiz erstellen“ nötig.
 Alternativ steht für einfache Integrationen auch
 `GET /shortcut?url=GETEILTE_URL` zur Verfügung.
 
+### `POST /smart-grocery-list`
+
+Erstellt aus bis zu zehn Rezept-Notizen eine gemeinsame Einkaufsliste. Der
+Endpunkt entfernt Duplikate, vereinheitlicht Schreibweisen, addiert kompatible
+Mengen und kann jedes Rezept vorab auf dieselbe Personenzahl skalieren.
+
+```json
+{
+  "recipes": [
+    "Rezept-Notiz 1 ...",
+    "Rezept-Notiz 2 ..."
+  ],
+  "target_servings": 4
+}
+```
+
+Ohne `target_servings` bleiben die ursprünglichen Mengen erhalten. Die Antwort
+enthält `items` als saubere Liste für Apple Erinnerungen.
+
 ### `POST /extract`
 
 **Request:**
@@ -195,6 +214,7 @@ recipe_tool/
 - Apple-Notizen-Formatierung in vier Stilen
 - Einkaufsliste, Portionsumrechnung, Kategorien und Nährwertschätzung
 - Vorratsauswahl vor dem Übertragen in Apples intelligente Einkaufsliste
+- Zusammenführen mehrerer Rezepte mit Mengenaddition und optionaler Skalierung
 - Essensplan, HTML-Rezeptkarte und lokales Rezept-Dashboard
 - In-Memory-Cache mit Ablaufzeit sowie Job-Verwaltung
 

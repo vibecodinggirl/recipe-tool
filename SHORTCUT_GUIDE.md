@@ -316,6 +316,23 @@ Erinnerungsliste „Einkaufsliste“ anzeigen
 > Dieser Kurzbefehl verarbeitet bewusst nur fertige Rezept-Notizen. Das Erstellen
 > eines Rezepts aus einem Video bleibt ein eigener Kurzbefehl.
 
+### Optional: mehrere Rezepte und Portionen
+
+Für einen Wocheneinkauf kann statt `/shopping-list-reminders` der Endpunkt
+`/smart-grocery-list` verwendet werden. Er akzeptiert:
+
+- `recipes`: bis zu zehn ausgewählte Rezepttexte als Liste
+- `target_servings`: gewünschte Personenzahl für jedes Rezept
+
+Der Server erledigt dabei drei Schritte in einem Aufruf:
+
+1. Alle Zutaten aus allen Rezepten extrahieren.
+2. Jedes Rezept auf die gewünschte Personenzahl skalieren.
+3. Gleiche Zutaten vereinheitlichen, zusammenführen und Mengen addieren.
+
+Die zurückgegebene Liste `items` kann anschließend mit derselben Vorratsauswahl
+und Wiederholung wie oben verarbeitet werden.
+
 ---
 
 ## Veraltete ausführliche Einkaufslisten-Variante
