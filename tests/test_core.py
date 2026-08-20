@@ -224,3 +224,31 @@ def test_shopping_filter_handles_no_available_items():
 def test_shopping_filter_requires_candidate_items():
     with pytest.raises(ValueError):
         main.ShoppingListFilterRequest(items=[])
+
+
+def test_grocery_start_returns_only_job_id(monkeypatch):
+    monkeypatch.setattr(main, "_extract_recipe_sync", lambda url: sample_recipe(formatted_note="Notiz"))
+    response = client.post(
+        "/grocery-start",
+        json={"url": "https://www.tiktok.com/@cook/video/123"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert len(response.text) == 32
+
+
+def test_grocery_wait_returns_ingredients_without_dictionary_steps():
+    main._jobs["ready"] = {
+        "status": "done",
+        "result": sample_recipe(),
+        "error": None,
+        "created_at": time.time(),
+    }
+    response = client.get("/grocery-wait/ready")
+    assert response.status_code == 200
+    assert response.json() == ["200 g Nudeln"]
+
+
+def test_grocery_wait_reports_missing_job():
+    response = client.get("/grocery-wait/unknown")
+    assert response.status_code == 404

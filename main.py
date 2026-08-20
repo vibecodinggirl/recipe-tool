@@ -419,6 +419,27 @@ async def extract_wait(job_id: str):
     return _job_public(job)
 
 
+@app.post("/grocery-start", response_class=PlainTextResponse)
+async def grocery_start(request: VideoRequest, background_tasks: BackgroundTasks):
+    """Startet die Extraktion und gibt für Kurzbefehle nur die Job-ID zurück."""
+    job = await extract_start(request, background_tasks)
+    return job["job_id"]
+
+
+@app.get("/grocery-wait/{job_id}")
+async def grocery_wait(job_id: str):
+    """Wartet auf die Extraktion und gibt direkt die benötigten Zutaten zurück."""
+    job = await extract_wait(job_id)
+    status = job.get("status")
+    if status == "done":
+        return job["result"].get("ingredients", [])
+    if status == "error":
+        raise HTTPException(status_code=500, detail=job.get("error") or "Extraktion fehlgeschlagen.")
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail=job.get("error") or "Job nicht gefunden.")
+    raise HTTPException(status_code=202, detail="Das Rezept wird noch verarbeitet. Bitte erneut versuchen.")
+
+
 def _run_extract_job(job_id: str, url: str):
     """Läuft im Hintergrund und speichert Ergebnis oder Fehler in _jobs."""
     try:

@@ -207,38 +207,36 @@ So machst du den Kurzbefehl im Share Sheet verfügbar:
 
 ## 🛒 Shortcut: Smarte Einkaufsliste (Video + Notiz)
 
-### Empfohlen für Apple Erinnerungen: Vorhandene Zutaten aussortieren
+### Kürzeste robuste Variante für Apple Erinnerungen
 
-Diese Variante schreibt jede fehlende Zutat einzeln in die intelligente Apple-Liste
-**„Einkaufsliste“**. Apple übernimmt dort die automatische Kategorisierung.
-
-Nachdem das Rezept extrahiert wurde und die Variablen `titel` und `zutaten`
-vorliegen, verwende diese Aktionen:
+Aktiviere **„Im Share Sheet anzeigen“** mit Eingabetyp **URLs**. Der Kurzbefehl
+benötigt danach nur diese sechs Aktionen:
 
 1. **„Inhalte von URL abrufen“**
-   - URL: `https://recipe-tool-redo.onrender.com/shopping-list-reminders`
+   - URL: `https://recipe-tool-redo.onrender.com/grocery-start`
    - Methode: **POST**, Inhalt: **JSON**
-   - `title` = `titel`
-   - `ingredients` = `zutaten`
-2. **„Aus Liste auswählen“**
-   - Liste: Ergebnis der vorherigen Aktion
+   - Textfeld `url` = **Kurzbefehl-Eingabe**
+2. **„Inhalte von URL abrufen“**
+   - URL: `https://recipe-tool-redo.onrender.com/grocery-wait/Ergebnis aus Aktion 1`
+   - Methode: **GET**
+   - Füge das Ergebnis der ersten Aktion über die Variablenauswahl direkt hinter
+     dem letzten Schrägstrich ein.
+3. **„Aus Liste auswählen“**
+   - Liste: Ergebnis aus Aktion 2
    - Frage: `Was hast du schon zu Hause?`
    - **Mehrfachauswahl erlauben** aktivieren
-3. Speichere die Auswahl als Variable `vorhanden`.
-4. **„Inhalte von URL abrufen“**
-   - URL: `https://recipe-tool-redo.onrender.com/shopping-list-filter`
-   - Methode: **POST**, Inhalt: **JSON**
-   - `items` = Ergebnis aus Schritt 1
-   - `available` = Variable `vorhanden`
-5. **„Wert aus Wörterbuch abrufen“** mit Schlüssel `items`.
-6. **„Mit jedem Objekt wiederholen“**.
-7. Innerhalb der Wiederholung: **„Neue Erinnerung hinzufügen“**
-   - Titel: `Wiederholungsobjekt`
+4. **„Mit jedem Objekt wiederholen“**
+   - Liste: Ergebnis aus Aktion 2
+5. Innerhalb der Wiederholung: **„Falls“**
+   - Falls die Auswahl aus Aktion 3 das **Wiederholungsobjekt nicht enthält**
+6. Innerhalb von „Falls“: **„Neue Erinnerung hinzufügen“**
+   - Titel: **Wiederholungsobjekt**
    - Liste: **Einkaufsliste**
 
-Damit erscheinen zuerst alle erkannten Zutaten zur Auswahl. Alles, was du als
-bereits vorhanden markierst, wird entfernt; nur der Rest landet in Apple
-Erinnerungen. Die Server-Kategorien werden bewusst nicht in den Titel geschrieben.
+Das ist die kürzeste robuste Variante mit anklickbarer Vorratsauswahl. Zwei
+Serveraufrufe sind nötig, damit die lange Videoverarbeitung nicht wieder als
+unterbrochene Netzwerkverbindung endet. Die Auswahl, Schleife, Bedingung und
+Erinnerungsaktion sind nötig, damit vorhandene Zutaten übersprungen werden.
 
 **Ein Shortcut für alles:** Erkennt automatisch ob du einen TikTok/Instagram-Link oder Rezepttext teilst und erstellt daraus eine kategorisierte Einkaufsliste.
 
