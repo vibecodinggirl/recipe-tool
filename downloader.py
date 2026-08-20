@@ -3,6 +3,8 @@ Video Downloader - Lädt Audio, Caption, Untertitel und Frames aus Instagram Ree
 Nutzt yt-dlp als Backend, mit HTML-Scraping als Fallback.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import uuid

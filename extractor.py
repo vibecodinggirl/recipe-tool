@@ -7,14 +7,20 @@ Unterstützt mehrere Modi:
   - API: OpenAI Whisper API + GPT (braucht API Key + Geld)
 """
 
+from __future__ import annotations
+
 import os
-import json
 import logging
 import shutil
 import random
 import time
 
 import httpx
+from dotenv import load_dotenv
+
+from json_utils import parse_json_object
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -166,46 +172,12 @@ def _transcribe_api(audio_path: str) -> str:
 
 def extract_recipe(combined_input: str, source_url: str) -> dict:
     """Extrahiert Rezept – lokal, via OpenRouter, Groq oder OpenAI API."""
-    if MODE == "openrouter":
-        raw = _extract_openrouter(combined_input)
-    elif MODE == "groq":
-        raw = _extract_groq(combined_input)
-    elif MODE == "api":
-        raw = _extract_api(combined_input)
-    else:
-        raw = _extract_ollama(combined_input)
-
+    raw = llm_query(RECIPE_EXTRACTION_PROMPT, combined_input)
     recipe = _parse_recipe_json(raw)
     recipe["source_url"] = source_url
     if "tips" not in recipe:
         recipe["tips"] = ""
     return recipe
-
-
-def _extract_ollama(transcript: str) -> str:
-    """Extrahiert Rezept mit Ollama (lokales LLM)."""
-    logger.info(f"Extrahiere Rezept mit Ollama ({OLLAMA_MODEL})...")
-
-    try:
-        response = httpx.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": f"{RECIPE_EXTRACTION_PROMPT}\n\n{transcript}",
-                "stream": False,
-                "options": {
-                    "temperature": 0.3,
-                    "num_predict": 2000,
-                },
-            },
-            timeout=httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0),
-        )
-        response.raise_for_status()
-        return response.json()["response"]
-    except httpx.ConnectError:
-        raise RuntimeError(f"Ollama nicht erreichbar unter {OLLAMA_URL}. Läuft der Server?")
-    except httpx.TimeoutException:
-        raise RuntimeError("Ollama Timeout — Antwort hat zu lange gedauert.")
 
 
 FALLBACK_MODELS = [
@@ -298,50 +270,12 @@ def _openrouter_chat(system_prompt: str, user_input: str) -> str:
     raise RuntimeError(f"Alle OpenRouter Modelle fehlgeschlagen. Letzter Fehler: {last_error}")
 
 
-def _extract_openrouter(transcript: str) -> str:
-    """Extrahiert Rezept mit OpenRouter API (kostenlos, mit Retry + Fallback-Modelle)."""
-    return _openrouter_chat(RECIPE_EXTRACTION_PROMPT, transcript)
-
-
-def _extract_groq(transcript: str) -> str:
-    """Extrahiert Rezept mit Groq API (kostenlos)."""
-    logger.info(f"Extrahiere Rezept mit Groq ({GROQ_LLM_MODEL})...")
-    return _groq_chat(RECIPE_EXTRACTION_PROMPT, transcript)
-
-
-def _extract_api(transcript: str) -> str:
-    """Extrahiert Rezept mit OpenAI GPT API."""
-    logger.info("Extrahiere Rezept mit OpenAI GPT...")
-    return _api_chat(RECIPE_EXTRACTION_PROMPT, transcript)
-
-
 def _parse_recipe_json(raw_content: str) -> dict:
     """Parst die LLM-Antwort als JSON."""
-    raw = raw_content.strip()
-
-    # Markdown-Codeblöcke entfernen
-    if "```" in raw:
-        lines = raw.split("\n")
-        json_lines = []
-        inside = False
-        for line in lines:
-            if line.strip().startswith("```"):
-                inside = not inside
-                continue
-            if inside:
-                json_lines.append(line)
-        raw = "\n".join(json_lines).strip()
-
-    # Finde das JSON-Objekt in der Antwort
-    start = raw.find("{")
-    end = raw.rfind("}") + 1
-    if start != -1 and end > start:
-        raw = raw[start:end]
-
     try:
-        recipe = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON Parse-Fehler: {e}\nRaw: {raw_content}")
+        recipe = parse_json_object(raw_content)
+    except ValueError as exc:
+        logger.error("JSON Parse-Fehler: %s", exc)
         raise ValueError("Rezept konnte nicht aus der Transkription extrahiert werden.")
 
     required_fields = ["title", "servings", "ingredients", "steps"]

@@ -1,5 +1,46 @@
 # 📱 Apple Shortcut einrichten – Schritt-für-Schritt
 
+## Empfohlen: Minimaler Kurzbefehl „Rezept speichern"
+
+Der Server erledigt jetzt die gesamte Verarbeitung. Der Kurzbefehl benötigt nur
+noch **zwei Aktionen** und enthält keine Schleifen, Bedingungen, Variablen oder
+Wörterbuchabfragen mehr.
+
+### Einmalige Einstellung
+
+Aktiviere beim Kurzbefehl **„Im Share Sheet anzeigen“** und wähle als Eingabetyp
+**URLs**.
+
+### Aktion 1: „Inhalte von URL abrufen“
+
+- URL: `https://recipe-tool-redo.onrender.com/shortcut`
+- Methode: **POST**
+- Anforderungsinhalt: **JSON**
+- Feld vom Typ **Text**: Schlüssel `url`, Wert **„Kurzbefehl-Eingabe“**
+
+Der Aufruf liefert bereits den vollständig formatierten Notiztext. Ein eigener
+Wake-Aufruf ist normalerweise nicht nötig: Der eigentliche Aufruf weckt den
+Render-Dienst ebenfalls auf.
+
+### Aktion 2: „Notiz erstellen“
+
+- Inhalt: Ausgabe von **„Inhalte von URL abrufen“**
+- Ordner: **Rezepte**
+
+Das ist der komplette Kurzbefehl. Die optionale Aktion „Hinweis anzeigen“ kann
+danach ergänzt werden, ist für die Funktion aber nicht erforderlich.
+
+> **Grenze:** Der Server kann keine Apple-Notiz direkt auf deinem iPhone anlegen.
+> Daher lässt sich die zweite Aktion nicht serverseitig übernehmen. Beim ersten
+> Aufruf nach längerer Inaktivität kann Render Free wegen des Kaltstarts deutlich
+> länger benötigen. Falls iOS diesen einzelnen Aufruf abbricht, ist ein Wake-Aufruf
+> als erste Aktion die robuste Drei-Aktionen-Variante.
+
+## Ältere und erweiterte Varianten
+
+Die folgenden Abläufe bleiben als Referenz für Sonderfunktionen erhalten. Für das
+normale Speichern eines Rezepts ist der lange Ablauf nicht mehr erforderlich.
+
 Rezepte aus TikTok/Instagram automatisch als Apple Note speichern.
 Funktioniert mit Render-Server: `https://recipe-tool-redo.onrender.com`
 

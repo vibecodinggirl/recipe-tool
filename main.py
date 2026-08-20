@@ -10,9 +10,13 @@ Der alte Endpoint bleibt erhalten:
 - POST /extract              -> blockierende Extraktion wie bisher
 """
 
+from __future__ import annotations
+
 import os
 import asyncio
+import copy
 import hashlib
+import html
 import logging
 import time
 import uuid
@@ -21,9 +25,12 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, HttpUrl, Field
+from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
+
+load_dotenv()
 
 from downloader import download_video_data, _download_audio
 from extractor import (
@@ -35,8 +42,7 @@ from extractor import (
     llm_query,
 )
 from ocr import extract_text_from_frames, cleanup_frames
-
-load_dotenv()
+from json_utils import parse_json_object
 
 NOTE_STYLE = os.getenv("NOTE_STYLE", "classic")
 
@@ -50,7 +56,6 @@ logger = logging.getLogger(__name__)
 
 MAX_CACHE = int(os.getenv("MAX_CACHE", "100"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))  # 24 Stunden
-DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "60"))  # Sekunden
 _cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
 _cache_lock = threading.Lock()
 
@@ -68,7 +73,8 @@ def _cache_get(url: str) -> dict | None:
             ts, data = _cache[key]
             if time.time() - ts < CACHE_TTL:
                 logger.info(f"Cache HIT für {url[:60]}")
-                return data
+                _cache.move_to_end(key)
+                return copy.deepcopy(data)
             del _cache[key]
     return None
 
@@ -76,7 +82,8 @@ def _cache_get(url: str) -> dict | None:
 def _cache_set(url: str, data: dict):
     key = _cache_key(url)
     with _cache_lock:
-        _cache[key] = (time.time(), data)
+        _cache[key] = (time.time(), copy.deepcopy(data))
+        _cache.move_to_end(key)
         while len(_cache) > MAX_CACHE:
             _cache.popitem(last=False)
 
@@ -85,8 +92,8 @@ def _cache_set(url: str, data: dict):
 # In-Memory Jobs für lange Video-Extraktion
 # ============================================================
 
-MAX_JOBS = 100
-JOB_TTL = 3600  # 1 Stunde
+MAX_JOBS = int(os.getenv("MAX_JOBS", "100"))
+JOB_TTL = int(os.getenv("JOB_TTL", "3600"))  # 1 Stunde
 _jobs: OrderedDict[str, dict] = OrderedDict()
 _jobs_lock = threading.Lock()
 
@@ -116,7 +123,7 @@ def _job_public(job: dict) -> dict:
 # Keep-Alive (pingt sich selbst alle 10 Min → kein Cold Start)
 # ============================================================
 
-KEEP_ALIVE_INTERVAL = 600  # 10 Minuten
+KEEP_ALIVE_INTERVAL = int(os.getenv("KEEP_ALIVE_INTERVAL", "600"))
 
 
 async def _keep_alive_loop():
@@ -158,7 +165,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recipe Extractor",
     description="Extrahiert Rezepte aus Instagram Reels & TikTok Videos",
-    version="1.2.0",
+    version="1.3.0",
     lifespan=lifespan,
 )
 
@@ -182,7 +189,7 @@ class ScaleRequest(BaseModel):
 
 
 class ShoppingListRequest(BaseModel):
-    ingredients: list[str] = []
+    ingredients: list[str] = Field(default_factory=list)
     title: str = ""
     text: str = ""
 
@@ -224,6 +231,19 @@ async def health():
 async def wake():
     """Leichtgewichtiger Endpoint zum Aufwecken des Servers."""
     return {"status": "awake"}
+
+
+@app.get("/shortcut", response_class=PlainTextResponse)
+async def shortcut_recipe(url: HttpUrl):
+    """Ein-Aufruf-Schnittstelle für Apple Kurzbefehle: URL rein, fertige Notiz raus."""
+    recipe = await run_in_threadpool(_extract_recipe_sync, str(url))
+    return recipe["formatted_note"]
+
+
+@app.post("/shortcut", response_class=PlainTextResponse)
+async def shortcut_recipe_post(request: VideoRequest):
+    """POST-Variante ohne URL-Encoding-Probleme in Apple Kurzbefehlen."""
+    return await shortcut_recipe(request.url)
 
 
 @app.get("/cache/stats")
@@ -428,7 +448,7 @@ def _run_extract_job(job_id: str, url: str):
 @app.post("/extract", response_model=RecipeResponse)
 async def extract_recipe_endpoint(request: VideoRequest):
     """Alte blockierende Extraktion. Für Apple Shortcut besser /extract-start nutzen."""
-    recipe = _extract_recipe_sync(str(request.url))
+    recipe = await run_in_threadpool(_extract_recipe_sync, str(request.url))
     return RecipeResponse(**recipe)
 
 
@@ -703,7 +723,7 @@ Leere Kategorien weglassen. Sprache: Deutsch."""
         )
 
     try:
-        raw = llm_query(prompt, user_input)
+        raw = await run_in_threadpool(llm_query, prompt, user_input)
         data = _parse_json_response(raw)
 
         lines = [f"🛒 {data.get('title', 'Einkaufsliste')}"]
@@ -761,7 +781,7 @@ Runde auf sinnvolle Mengen (nicht 2.67 Eier → 3 Eier). Sprache: Deutsch."""
     )
 
     try:
-        raw = llm_query(prompt, user_input)
+        raw = await run_in_threadpool(llm_query, prompt, user_input)
         data = _parse_json_response(raw)
         return data
     except Exception as e:
@@ -801,7 +821,7 @@ Sprache: Deutsch. Nur relevante Tags vergeben."""
     )
 
     try:
-        raw = llm_query(prompt, user_input)
+        raw = await run_in_threadpool(llm_query, prompt, user_input)
         data = _parse_json_response(raw)
         data["recipe_title"] = recipe["title"]
         return data
@@ -841,7 +861,7 @@ Werte sind Schätzungen basierend auf üblichen Mengen. Sprache: Deutsch."""
     user_input = f"Rezept: {request.title}\nPortionen: {request.servings}\nZutaten:\n{ingredients_text}"
 
     try:
-        raw = llm_query(prompt, user_input)
+        raw = await run_in_threadpool(llm_query, prompt, user_input)
         data = _parse_json_response(raw)
         data["title"] = request.title
         ps = data.get("per_serving", {})
@@ -889,7 +909,7 @@ Regeln:
 Sprache: Deutsch."""
 
     try:
-        raw = llm_query(prompt, f"Erstelle einen Plan für {request.days} Tage")
+        raw = await run_in_threadpool(llm_query, prompt, f"Erstelle einen Plan für {request.days} Tage")
         data = _parse_json_response(raw)
 
         lines = [f"📅 Essensplan ({request.days} Tage)", ""]
@@ -935,16 +955,19 @@ async def recipe_card(request: VideoRequest):
 
 def _generate_recipe_card_html(r: dict) -> str:
     """Generiert eine hübsche Rezeptkarte als HTML."""
-    ingredients_html = "".join(f"<li>{ing}</li>" for ing in r.get("ingredients", []))
-    steps_html = "".join(f"<li>{step}</li>" for step in r.get("steps", []))
-    tips_html = f'<div class="tips">💡 {r["tips"]}</div>' if r.get("tips") else ""
+    ingredients_html = "".join(f"<li>{html.escape(str(ing))}</li>" for ing in r.get("ingredients", []))
+    steps_html = "".join(f"<li>{html.escape(str(step))}</li>" for step in r.get("steps", []))
+    tips_html = f'<div class="tips">💡 {html.escape(str(r["tips"]))}</div>' if r.get("tips") else ""
+    title = html.escape(str(r.get("title", "Rezept")))
+    servings = html.escape(str(r.get("servings", "")))
+    source_url = html.escape(str(r.get("source_url", "")))
 
     return f"""<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{r.get('title', 'Rezept')}</title>
+<title>{title}</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -972,8 +995,8 @@ def _generate_recipe_card_html(r: dict) -> str:
 <body>
 <div class="card">
   <div class="header">
-    <h1>🍳 {r.get('title', 'Rezept')}</h1>
-    <div class="servings">👥 {r.get('servings', '')}</div>
+    <h1>🍳 {title}</h1>
+    <div class="servings">👥 {servings}</div>
   </div>
   <div class="section ingredients">
     <h2>📝 Zutaten</h2>
@@ -984,7 +1007,7 @@ def _generate_recipe_card_html(r: dict) -> str:
     <ol>{steps_html}</ol>
   </div>
   {tips_html}
-  <div class="footer">📱 {r.get('source_url', '')}</div>
+  <div class="footer">📱 {source_url}</div>
 </div>
 </body>
 </html>"""
@@ -997,28 +1020,33 @@ def _generate_recipe_card_html(r: dict) -> str:
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     """Einfaches Web-Dashboard mit allen gespeicherten Rezepten."""
-    recipes = []
-    for key, (ts, data) in _cache.items():
-        recipes.append(data)
+    with _cache_lock:
+        recipes = [copy.deepcopy(data) for _, data in _cache.values()]
 
     recipe_cards = ""
     if not recipes:
         recipe_cards = '<p class="empty">Noch keine Rezepte gespeichert. Teile ein Video über den Shortcut!</p>'
     else:
         for r in recipes:
-            ingredients_preview = ", ".join(r.get("ingredients", [])[:5])
+            title = html.escape(str(r.get("title", "Unbekannt")))
+            servings = html.escape(str(r.get("servings", "?")))
+            ingredients = [html.escape(str(item)) for item in r.get("ingredients", [])]
+            steps = [html.escape(str(step)) for step in r.get("steps", [])]
+            ingredients_preview = ", ".join(ingredients[:5])
+            tips = html.escape(str(r.get("tips", "")))
+            source_url = html.escape(str(r.get("source_url", "#")), quote=True)
             recipe_cards += f"""
             <div class="recipe-card" onclick="this.classList.toggle('expanded')">
-              <h2>🍳 {r.get('title', 'Unbekannt')}</h2>
-              <div class="meta">👥 {r.get('servings', '?')} · 📝 {len(r.get('ingredients', []))} Zutaten</div>
+              <h2>🍳 {title}</h2>
+              <div class="meta">👥 {servings} · 📝 {len(ingredients)} Zutaten</div>
               <div class="preview">{ingredients_preview}...</div>
               <div class="details">
                 <h3>Zutaten:</h3>
-                <ul>{"".join(f"<li>{ing}</li>" for ing in r.get("ingredients", []))}</ul>
+                <ul>{"".join(f"<li>{ing}</li>" for ing in ingredients)}</ul>
                 <h3>Zubereitung:</h3>
-                <ol>{"".join(f"<li>{s}</li>" for s in r.get("steps", []))}</ol>
-                {f'<p class="tips">💡 {r["tips"]}</p>' if r.get("tips") else ""}
-                <a href="{r.get('source_url', '#')}" target="_blank">📱 Original-Video</a>
+                <ol>{"".join(f"<li>{step}</li>" for step in steps)}</ol>
+                {f'<p class="tips">💡 {tips}</p>' if tips else ""}
+                <a href="{source_url}" target="_blank" rel="noopener noreferrer">📱 Original-Video</a>
               </div>
             </div>"""
 
@@ -1082,28 +1110,7 @@ async def dashboard():
 
 def _parse_json_response(raw: str) -> dict:
     """Parst JSON aus einer LLM-Antwort mit Markdown-Cleanup."""
-    import json
-
-    text = raw.strip()
-
-    if "```" in text:
-        lines = text.split("\n")
-        json_lines = []
-        inside = False
-        for line in lines:
-            if line.strip().startswith("```"):
-                inside = not inside
-                continue
-            if inside:
-                json_lines.append(line)
-        text = "\n".join(json_lines).strip()
-
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start != -1 and end > start:
-        text = text[start:end]
-
-    return json.loads(text)
+    return parse_json_object(raw)
 
 
 if __name__ == "__main__":

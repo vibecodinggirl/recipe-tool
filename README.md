@@ -120,6 +120,21 @@ OPENAI_API_KEY=sk-...
 
 ## API
 
+### `POST /shortcut`
+
+Minimaler Endpunkt für Apple Kurzbefehle. Er erledigt die komplette Extraktion und
+liefert direkt die fertig formatierte Notiz als Klartext. Im Kurzbefehl sind deshalb
+nur „Inhalte von URL abrufen“ und „Notiz erstellen“ nötig.
+
+```json
+{
+  "url": "GETEILTE_URL"
+}
+```
+
+Alternativ steht für einfache Integrationen auch
+`GET /shortcut?url=GETEILTE_URL` zur Verfügung.
+
 ### `POST /extract`
 
 **Request:**
@@ -160,11 +175,35 @@ recipe_tool/
 ├── main.py              # FastAPI Server & Endpunkte
 ├── downloader.py        # Video/Audio Download (yt-dlp)
 ├── extractor.py         # Transkription & Rezept-Extraktion (lokal oder API)
+├── json_utils.py        # Gemeinsames, robustes Parsen von KI-Antworten
+├── tests/               # Automatisierte Offline-Tests
 ├── requirements.txt     # Python Dependencies
+├── requirements-cloud.txt # Schlanke Dependencies für Docker/Render
+├── requirements-dev.txt # Test-Dependencies
 ├── .env.example         # Vorlage für Umgebungsvariablen
 ├── .gitignore
 ├── SHORTCUT_GUIDE.md    # Apple Shortcut Anleitung
 └── README.md
+```
+
+## Vorhandene Funktionen
+
+- Rezept-Extraktion synchron oder als Hintergrundjob
+- Transkription über lokales Whisper, Groq oder OpenAI
+- Rezeptanalyse über Ollama, OpenRouter, Groq oder OpenAI
+- Caption-, Untertitel- und optional OCR-Auswertung
+- Apple-Notizen-Formatierung in vier Stilen
+- Einkaufsliste, Portionsumrechnung, Kategorien und Nährwertschätzung
+- Essensplan, HTML-Rezeptkarte und lokales Rezept-Dashboard
+- In-Memory-Cache mit Ablaufzeit sowie Job-Verwaltung
+
+## Tests
+
+Die Offline-Tests benötigen keine API-Schlüssel und laden keine Videos herunter:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
 ```
 
 ## Whisper Modelle (Geschwindigkeit vs. Qualität)
