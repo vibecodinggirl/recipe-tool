@@ -205,38 +205,123 @@ So machst du den Kurzbefehl im Share Sheet verfügbar:
 
 ---
 
-## 🛒 Shortcut: Smarte Einkaufsliste (Video + Notiz)
+## 🛒 Shortcut: Apple-Einkaufsliste
 
-### Kürzeste robuste Variante für Apple Erinnerungen
+### Aktuelle Empfehlung: kurze Version
 
-Aktiviere **„Im Share Sheet anzeigen“** mit Eingabetyp **URLs**. Der Kurzbefehl
-benötigt danach nur diese sechs Aktionen:
+#### Was passiert?
 
-1. **„Inhalte von URL abrufen“**
-   - URL: `https://recipe-tool-redo.onrender.com/grocery-start`
-   - Methode: **POST**, Inhalt: **JSON**
-   - Textfeld `url` = **Kurzbefehl-Eingabe**
-2. **„Inhalte von URL abrufen“**
-   - URL: `https://recipe-tool-redo.onrender.com/grocery-wait/Ergebnis aus Aktion 1`
-   - Methode: **GET**
-   - Füge das Ergebnis der ersten Aktion über die Variablenauswahl direkt hinter
-     dem letzten Schrägstrich ein.
-3. **„Aus Liste auswählen“**
-   - Liste: Ergebnis aus Aktion 2
-   - Frage: `Was hast du schon zu Hause?`
-   - **Mehrfachauswahl erlauben** aktivieren
-4. **„Mit jedem Objekt wiederholen“**
-   - Liste: Ergebnis aus Aktion 2
-5. Innerhalb der Wiederholung: **„Falls“**
-   - Falls die Auswahl aus Aktion 3 das **Wiederholungsobjekt nicht enthält**
-6. Innerhalb von „Falls“: **„Neue Erinnerung hinzufügen“**
-   - Titel: **Wiederholungsobjekt**
-   - Liste: **Einkaufsliste**
+1. Du öffnest eine fertige Rezept-Notiz und teilst ihren Text mit dem Kurzbefehl.
+2. Der Server erkennt daraus die benötigten Zutaten.
+3. Du markierst, welche Zutaten du bereits zu Hause hast.
+4. Nur die fehlenden Zutaten landen in der Apple-Liste **„Einkaufsliste“**.
 
-Das ist die kürzeste robuste Variante mit anklickbarer Vorratsauswahl. Zwei
-Serveraufrufe sind nötig, damit die lange Videoverarbeitung nicht wieder als
-unterbrochene Netzwerkverbindung endet. Die Auswahl, Schleife, Bedingung und
-Erinnerungsaktion sind nötig, damit vorhandene Zutaten übersprungen werden.
+#### Einmal vorbereiten
+
+- Erstelle in **Apple Erinnerungen** eine Liste namens **„Einkaufsliste“**.
+- Erstelle in **Apple Kurzbefehle** einen Kurzbefehl namens **„Einkaufsliste“**.
+- Öffne die Details des Kurzbefehls.
+- Aktiviere **„Im Share Sheet anzeigen“**.
+- Wähle als Eingabetyp ausschließlich **Text**.
+
+#### Die sieben Aktionen
+
+#### 1. Zutaten aus der Notiz erkennen
+
+Füge **„Inhalte von URL abrufen“** hinzu:
+
+- URL: `https://recipe-tool-redo.onrender.com/shopping-list-reminders`
+- Methode: **POST**
+- Anforderungsinhalt: **JSON**
+- Neues Feld vom Typ **Text**:
+  - Schlüssel: `text`
+  - Wert: **Kurzbefehl-Eingabe**
+
+Die Antwort ist direkt die Zutatenliste. Du brauchst keine Wörterbuchabfrage und
+keine zusätzliche Variable.
+
+#### 2. Vorhandene Zutaten auswählen
+
+Füge **„Aus Liste auswählen“** hinzu:
+
+- Liste: **„Inhalte von URL“ aus Aktion 1**
+- Frage: `Was hast du schon zu Hause?`
+- Aktiviere **„Mehrere auswählen“**.
+- Lass **„Alle auswählen“** deaktiviert.
+
+Beim Ausführen markierst du hier ausschließlich die Zutaten, die nicht gekauft
+werden müssen.
+
+#### 3. Auswahl sicher als Text behandeln
+
+Füge **„Text kombinieren“** hinzu:
+
+- Eingabe: **Ausgewähltes Objekt** aus Aktion 2
+- Trennzeichen: **Neue Zeilen**
+
+Diese Aktion verhindert, dass iOS die Auswahl fälschlich als Datei und die
+Bedingung als „Dateigröße in MB“ behandelt.
+
+#### 4. Alle benötigten Zutaten durchgehen
+
+Füge **„Mit jedem Objekt wiederholen“** hinzu:
+
+- Eingabe: **„Inhalte von URL“ aus Aktion 1**
+
+#### 5. Vorhandene Zutaten überspringen
+
+Füge innerhalb der Wiederholung eine **„Falls“**-Aktion ein:
+
+- Eingabe: Ergebnis von **„Text kombinieren“** aus Aktion 3
+- Bedingung: **enthält nicht**
+- Vergleichswert: **Wiederholungsobjekt**
+
+Wenn in der „Falls“-Aktion **„Dateigröße“** oder **„MB“** erscheint, ist die
+falsche Variable ausgewählt. Lösche die „Falls“-Aktion und füge sie erneut mit
+dem Ergebnis von **„Text kombinieren“** ein.
+
+#### 6. Fehlende Zutat hinzufügen
+
+Füge innerhalb des **„Falls“**-Blocks **„Neue Erinnerung hinzufügen“** ein:
+
+- Titel: **Wiederholungsobjekt**
+- Liste: **Einkaufsliste**
+
+Die automatisch erzeugten Blöcke **„Sonst“**, **„Ende von Falls“** und
+**„Ende Wiederholen“** bleiben unverändert. In den „Sonst“-Block kommt keine Aktion.
+
+#### 7. Einkaufsliste öffnen
+
+Füge nach **„Ende Wiederholen“** die Aktion **„Erinnerungsliste anzeigen“** hinzu:
+
+- Liste: **Einkaufsliste**
+
+Falls diese Aktion auf deinem iPhone nicht angeboten wird, verwende stattdessen
+**„App öffnen“** und wähle **Erinnerungen**.
+
+#### So sieht die Struktur aus
+
+```text
+Inhalte von URL abrufen: Notiztext an /shopping-list-reminders senden
+Aus Zutatenliste auswählen: Was hast du schon zu Hause?
+Auswahl mit neuen Zeilen zu Text kombinieren
+Mit jeder benötigten Zutat wiederholen
+    Falls kombinierter Text die Zutat nicht enthält
+        Neue Erinnerung in „Einkaufsliste“ hinzufügen
+    Ende Falls
+Ende Wiederholen
+Erinnerungsliste „Einkaufsliste“ anzeigen
+```
+
+> Dieser Kurzbefehl verarbeitet bewusst nur fertige Rezept-Notizen. Das Erstellen
+> eines Rezepts aus einem Video bleibt ein eigener Kurzbefehl.
+
+---
+
+## Veraltete ausführliche Einkaufslisten-Variante
+
+> Die folgende Variante bleibt nur als technische Referenz erhalten. Für einen
+> neuen Kurzbefehl solltest du die oben beschriebene Sieben-Aktionen-Version verwenden.
 
 **Ein Shortcut für alles:** Erkennt automatisch ob du einen TikTok/Instagram-Link oder Rezepttext teilst und erstellt daraus eine kategorisierte Einkaufsliste.
 
