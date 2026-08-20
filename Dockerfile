@@ -11,7 +11,7 @@ WORKDIR /app
 COPY requirements-cloud.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py downloader.py extractor.py ocr.py json_utils.py ./
+COPY main.py downloader.py extractor.py ocr.py json_utils.py storage.py ./
 
 EXPOSE 8000
 

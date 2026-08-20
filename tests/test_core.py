@@ -1,6 +1,7 @@
 import asyncio
 import ast
 import time
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import main
+import storage
 from downloader import _parse_srt, _validate_url
 from extractor import _parse_recipe_json, build_extraction_input
 from json_utils import parse_json_object
@@ -22,6 +24,13 @@ def clear_runtime_state():
     with main._jobs_lock:
         main._jobs.clear()
     yield
+
+
+@pytest.fixture
+def temporary_database(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "test.db"))
+    storage.initialize()
+    return tmp_path / "test.db"
 
 
 def sample_recipe(**overrides):
@@ -353,3 +362,47 @@ def test_merge_grocery_list_rejects_empty_recipe():
         json={"recipe_text": "", "existing_items": []},
     )
     assert response.status_code == 422
+
+
+def test_recipe_plan_and_tracker_share_persistent_data(temporary_database):
+    recipe = storage.save_recipe(
+        sample_recipe(),
+        {"per_serving": {"calories": 500, "protein_g": 20, "carbs_g": 60, "fat_g": 15}},
+    )
+    assert storage.get_recipe(recipe["id"])["ingredients"] == ["200 g Nudeln"]
+    storage.add_plan("2026-08-21", "Abendessen", recipe["id"], 1.5)
+    assert storage.list_plan("2026-08-20", "2026-08-26")[0]["title"] == "Pasta"
+
+    storage.set_calorie_target(2200)
+    storage.log_food("Pasta", 1.5, {"calories": 500, "protein_g": 20, "carbs_g": 60, "fat_g": 15},
+                     recipe["id"], "2026-08-21T18:00:00")
+    summary = storage.daily_summary("2026-08-21")
+    assert summary["totals"]["calories"] == 750
+    assert summary["remaining_calories"] == 1450
+
+
+def test_tracker_rejects_recipe_without_nutrition(temporary_database):
+    recipe = storage.save_recipe(sample_recipe())
+    response = client.post("/tracker/log", json={"recipe_id": recipe["id"], "servings": 1})
+    assert response.status_code == 400
+
+
+def test_recipe_library_avoids_duplicate_source_urls(temporary_database):
+    first = storage.save_recipe(sample_recipe())
+    second = storage.save_recipe(sample_recipe(title="Dasselbe Video"))
+    assert second["id"] == first["id"]
+    assert len(storage.list_recipes()) == 1
+
+
+def test_dashboard_combines_library_plan_and_tracker(temporary_database):
+    recipe = storage.save_recipe(
+        sample_recipe(),
+        {"per_serving": {"calories": 500, "protein_g": 20, "carbs_g": 60, "fat_g": 15}},
+    )
+    storage.add_plan(date.today().isoformat(), "Abendessen", recipe["id"], 1)
+    storage.log_food("Pasta", 1, {"calories": 500, "protein_g": 20, "carbs_g": 60, "fat_g": 15})
+    response = client.get("/dashboard")
+    assert response.status_code == 200
+    assert "Meine Rezepte" in response.text
+    assert "Heute gegessen" in response.text
+    assert "Abendessen" in response.text

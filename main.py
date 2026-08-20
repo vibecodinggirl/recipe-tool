@@ -21,6 +21,7 @@ import logging
 import time
 import uuid
 import threading
+from datetime import date, timedelta
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -44,6 +45,7 @@ from extractor import (
 )
 from ocr import extract_text_from_frames, cleanup_frames
 from json_utils import parse_json_object
+import storage
 
 NOTE_STYLE = os.getenv("NOTE_STYLE", "classic")
 
@@ -152,6 +154,7 @@ async def _keep_alive_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs("tmp", exist_ok=True)
+    storage.initialize()
     keep_alive_task = asyncio.create_task(_keep_alive_loop())
     yield
     keep_alive_task.cancel()
@@ -219,6 +222,33 @@ class NutritionRequest(BaseModel):
 class MealPlanRequest(BaseModel):
     days: int = Field(default=5, ge=1, le=7)
     preferences: str = ""
+
+
+class SavedRecipeRequest(BaseModel):
+    title: str
+    servings: str = ""
+    ingredients: list[str]
+    steps: list[str] = Field(default_factory=list)
+    tips: str = ""
+    source_url: str = ""
+    nutrition: dict = Field(default_factory=dict)
+
+
+class PlanEntryRequest(BaseModel):
+    plan_date: str
+    meal_type: str
+    recipe_id: int
+    servings: float = Field(default=1, gt=0, le=20)
+
+
+class FoodLogRequest(BaseModel):
+    recipe_id: int
+    servings: float = Field(default=1, gt=0, le=20)
+    eaten_at: str = ""
+
+
+class CalorieTargetRequest(BaseModel):
+    calories: float = Field(gt=0, le=10000)
 
 
 class RecipeResponse(BaseModel):
@@ -584,6 +614,10 @@ def _extract_recipe_sync(url: str) -> dict:
         recipe["formatted_note"] = formatted
 
         _cache_set(url, recipe)
+        try:
+            storage.save_recipe(recipe)
+        except Exception as e:
+            logger.warning(f"Rezept konnte nicht dauerhaft gespeichert werden: {e}")
         return recipe
 
     finally:
@@ -1125,6 +1159,78 @@ Sprache: Deutsch."""
 
 
 # ============================================================
+# Persistente Rezeptsammlung, Planung und Ernährungstagebuch
+# ============================================================
+
+@app.post("/library/recipes")
+async def save_library_recipe(request: SavedRecipeRequest):
+    return await run_in_threadpool(storage.save_recipe, request.model_dump(exclude={"nutrition"}), request.nutrition)
+
+
+@app.get("/library/recipes")
+async def get_library_recipes():
+    return await run_in_threadpool(storage.list_recipes)
+
+
+@app.post("/library/recipes/{recipe_id}/nutrition")
+async def calculate_library_nutrition(recipe_id: int):
+    recipe = await run_in_threadpool(storage.get_recipe, recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Rezept nicht gefunden.")
+    request = NutritionRequest(title=recipe["title"], ingredients=recipe["ingredients"], servings=recipe["servings"])
+    nutrition = await estimate_nutrition(request)
+    return await run_in_threadpool(storage.update_nutrition, recipe_id, nutrition)
+
+
+@app.post("/planner/entries")
+async def create_plan_entry(request: PlanEntryRequest):
+    if not storage.get_recipe(request.recipe_id):
+        raise HTTPException(status_code=404, detail="Rezept nicht gefunden.")
+    try:
+        date.fromisoformat(request.plan_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Datum muss YYYY-MM-DD sein.")
+    return await run_in_threadpool(storage.add_plan, request.plan_date, request.meal_type, request.recipe_id, request.servings)
+
+
+@app.get("/planner/week")
+async def get_plan_week(start: Optional[str] = None):
+    try:
+        start_date = date.fromisoformat(start) if start else date.today()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Datum muss YYYY-MM-DD sein.")
+    return await run_in_threadpool(storage.list_plan, start_date.isoformat(), (start_date + timedelta(days=6)).isoformat())
+
+
+@app.post("/tracker/log")
+async def create_food_log(request: FoodLogRequest):
+    recipe = storage.get_recipe(request.recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Rezept nicht gefunden.")
+    nutrition = {key: recipe.get(key) for key in ("calories", "protein_g", "carbs_g", "fat_g")}
+    if any(value is None for value in nutrition.values()):
+        raise HTTPException(status_code=400, detail="Für dieses Rezept fehlen Nährwerte.")
+    eaten_at = request.eaten_at or None
+    result = await run_in_threadpool(storage.log_food, recipe["title"], request.servings, nutrition, recipe["id"], eaten_at)
+    return {**result, "summary": storage.daily_summary((eaten_at or date.today().isoformat())[:10])}
+
+
+@app.get("/tracker/day/{day}")
+async def get_daily_log(day: str):
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Datum muss YYYY-MM-DD sein.")
+    return await run_in_threadpool(storage.daily_summary, day)
+
+
+@app.put("/tracker/target")
+async def update_calorie_target(request: CalorieTargetRequest):
+    await run_in_threadpool(storage.set_calorie_target, request.calories)
+    return {"calorie_target": request.calories}
+
+
+# ============================================================
 # Feature: Rezept-Bild (Karte als HTML → Screenshot-fähig)
 # ============================================================
 
@@ -1207,15 +1313,18 @@ def _generate_recipe_card_html(r: dict) -> str:
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    """Einfaches Web-Dashboard mit allen gespeicherten Rezepten."""
-    with _cache_lock:
-        recipes = [copy.deepcopy(data) for _, data in _cache.values()]
+    """Mobile Übersicht für Rezeptsammlung, Essensplan und Kalorientracker."""
+    recipes = await run_in_threadpool(storage.list_recipes)
+    today = date.today().isoformat()
+    summary = await run_in_threadpool(storage.daily_summary, today)
+    week = await run_in_threadpool(storage.list_plan, today, (date.today() + timedelta(days=6)).isoformat())
 
     recipe_cards = ""
     if not recipes:
         recipe_cards = '<p class="empty">Noch keine Rezepte gespeichert. Teile ein Video über den Shortcut!</p>'
     else:
         for r in recipes:
+            recipe_id = int(r["id"])
             title = html.escape(str(r.get("title", "Unbekannt")))
             servings = html.escape(str(r.get("servings", "?")))
             ingredients = [html.escape(str(item)) for item in r.get("ingredients", [])]
@@ -1223,11 +1332,16 @@ async def dashboard():
             ingredients_preview = ", ".join(ingredients[:5])
             tips = html.escape(str(r.get("tips", "")))
             source_url = html.escape(str(r.get("source_url", "#")), quote=True)
+            calories = r.get("calories")
+            nutrition_text = f"🔥 {calories:.0f} kcal pro Portion" if calories is not None else "Nährwerte noch nicht berechnet"
             recipe_cards += f"""
-            <div class="recipe-card" onclick="this.classList.toggle('expanded')">
+            <div class="recipe-card">
+              <div onclick="this.parentElement.classList.toggle('expanded')">
               <h2>🍳 {title}</h2>
               <div class="meta">👥 {servings} · 📝 {len(ingredients)} Zutaten</div>
+              <div class="meta">{nutrition_text}</div>
               <div class="preview">{ingredients_preview}...</div>
+              </div>
               <div class="details">
                 <h3>Zutaten:</h3>
                 <ul>{"".join(f"<li>{ing}</li>" for ing in ingredients)}</ul>
@@ -1235,8 +1349,18 @@ async def dashboard():
                 <ol>{"".join(f"<li>{step}</li>" for step in steps)}</ol>
                 {f'<p class="tips">💡 {tips}</p>' if tips else ""}
                 <a href="{source_url}" target="_blank" rel="noopener noreferrer">📱 Original-Video</a>
+                <div class="actions">
+                  {f'<button onclick="nutrition({recipe_id})">Nährwerte berechnen</button>' if calories is None else f'<button onclick="logFood({recipe_id})">Heute gegessen</button>'}
+                  <button class="secondary" onclick="planRecipe({recipe_id})">Einplanen</button>
+                </div>
               </div>
             </div>"""
+
+    plan_rows = "".join(
+        f'<li><b>{html.escape(str(item["plan_date"]))}</b> · {html.escape(str(item["meal_type"]))}: '
+        f'{html.escape(str(item["title"]))} ({item["servings"]:g} Portionen)</li>' for item in week
+    ) or "<li>Noch nichts eingeplant.</li>"
+    totals = summary["totals"]
 
     return f"""<!DOCTYPE html>
 <html lang="de">
@@ -1253,6 +1377,12 @@ async def dashboard():
   .header h1 {{ font-size: 2em; margin-bottom: 8px; }}
   .header p {{ opacity: 0.8; }}
   .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+  .panel {{ background: white; border-radius: 16px; padding: 20px; margin-bottom: 18px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+  .panel h2 {{ margin-bottom: 12px; }}
+  .progress {{ height: 12px; border-radius: 8px; background: #eee; overflow: hidden; margin: 10px 0; }}
+  .progress span {{ display:block; height:100%; background:#667eea; width:{min(100, totals['calories'] / summary['target_calories'] * 100):.1f}%; }}
+  .plan {{ list-style: none; }} .plan li {{ padding: 7px 0; border-bottom: 1px solid #eee; }}
   .stats {{ display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }}
   .stat {{ background: white; border-radius: 16px; padding: 16px 20px;
            flex: 1; min-width: 120px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
@@ -1273,6 +1403,9 @@ async def dashboard():
   .details li {{ padding: 4px 0; }}
   .details .tips {{ background: #fff9e6; padding: 10px; border-radius: 8px; margin-top: 12px; }}
   .details a {{ color: #667eea; text-decoration: none; display: inline-block; margin-top: 12px; }}
+  .actions {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }}
+  button {{ border:0; background:#667eea; color:white; padding:11px 14px; border-radius:10px; font-weight:600; }}
+  button.secondary {{ background:#eee; color:#444; }}
   .empty {{ text-align: center; color: #888; padding: 60px 20px; font-size: 1.1em; }}
 </style>
 </head>
@@ -1282,12 +1415,54 @@ async def dashboard():
   <p>Alle Rezepte aus deinem Shortcut</p>
 </div>
 <div class="container">
+  <div class="panel">
+    <h2>🔥 Heute</h2>
+    <div><b>{totals['calories']:.0f}</b> von {summary['target_calories']:.0f} kcal · noch {summary['remaining_calories']:.0f} kcal</div>
+    <div class="progress"><span></span></div>
+    <small>Protein {totals['protein_g']:.0f} g · Kohlenhydrate {totals['carbs_g']:.0f} g · Fett {totals['fat_g']:.0f} g</small>
+    <div class="actions"><button class="secondary" onclick="setTarget()">Tagesziel ändern</button></div>
+  </div>
+  <div class="panel">
+    <h2>📅 Nächste 7 Tage</h2>
+    <ul class="plan">{plan_rows}</ul>
+  </div>
   <div class="stats">
     <div class="stat"><div class="number">{len(recipes)}</div><div class="label">Rezepte</div></div>
     <div class="stat"><div class="number">{sum(len(r.get('ingredients', [])) for r in recipes)}</div><div class="label">Zutaten gesamt</div></div>
   </div>
   {recipe_cards}
 </div>
+<script>
+async function call(url, options) {{
+  const response = await fetch(url, options);
+  if (!response.ok) {{ const error = await response.json(); throw new Error(error.detail || 'Das hat nicht geklappt.'); }}
+  return response.json();
+}}
+async function nutrition(id) {{
+  try {{ await call(`/library/recipes/${{id}}/nutrition`, {{method:'POST'}}); location.reload(); }}
+  catch (e) {{ alert(e.message); }}
+}}
+async function logFood(id) {{
+  const servings = prompt('Wie viele Portionen hast du gegessen?', '1');
+  if (!servings) return;
+  try {{ await call('/tracker/log', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{recipe_id:id, servings:Number(servings)}})}}); location.reload(); }}
+  catch (e) {{ alert(e.message); }}
+}}
+async function planRecipe(id) {{
+  const plan_date = prompt('Für welches Datum? (JJJJ-MM-TT)', '{today}');
+  if (!plan_date) return;
+  const meal_type = prompt('Welche Mahlzeit?', 'Abendessen');
+  if (!meal_type) return;
+  try {{ await call('/planner/entries', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{recipe_id:id, plan_date, meal_type, servings:1}})}}); location.reload(); }}
+  catch (e) {{ alert(e.message); }}
+}}
+async function setTarget() {{
+  const calories = prompt('Wie hoch ist dein tägliches Kalorienziel?', '{summary['target_calories']:.0f}');
+  if (!calories) return;
+  try {{ await call('/tracker/target', {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{calories:Number(calories)}})}}); location.reload(); }}
+  catch (e) {{ alert(e.message); }}
+}}
+</script>
 </body>
 </html>"""
 

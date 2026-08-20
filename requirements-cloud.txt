@@ -6,3 +6,4 @@ python-dotenv==1.0.1
 pydantic==2.9.1
 pytesseract==0.3.13
 Pillow==10.4.0
+psycopg[binary]>=3.2,<4

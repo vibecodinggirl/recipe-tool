@@ -84,6 +84,25 @@ curl -X POST http://localhost:8000/extract \
 
 Siehe [SHORTCUT_GUIDE.md](SHORTCUT_GUIDE.md) für die Schritt-für-Schritt-Anleitung.
 
+## Essensplan und Kalorientracker
+
+Unter `/dashboard` findest du eine gemeinsame, für das Handy geeignete Übersicht:
+
+- extrahierte Rezepte werden automatisch in der Rezeptsammlung gespeichert,
+- fehlende Nährwerte lassen sich mit einem Knopfdruck schätzen,
+- Rezepte können für ein Datum eingeplant und als gegessen eingetragen werden,
+- Kalorien und Makronährstoffe werden pro Tag zusammengerechnet.
+
+Lokal werden die Daten automatisch in `data/recipe_tool.db` gespeichert. Auf Render
+sollte `DATABASE_URL` auf eine dauerhafte PostgreSQL-Datenbank zeigen. Für Supabase:
+
+1. Ein kostenloses Projekt anlegen.
+2. Unter **Project Settings → Database** den Connection-String kopieren.
+3. In Render eine geheime Umgebungsvariable `DATABASE_URL` mit diesem Wert anlegen.
+4. Den Render-Dienst neu starten. Die Tabellen werden automatisch erstellt.
+
+Am bestehenden Apple-Kurzbefehl muss dafür nichts geändert werden.
+
 ## iPhone mit Server verbinden
 
 Dein Mac/PC und iPhone müssen **im gleichen WLAN** sein.
@@ -219,6 +238,7 @@ recipe_tool/
 ├── downloader.py        # Video/Audio Download (yt-dlp)
 ├── extractor.py         # Transkription & Rezept-Extraktion (lokal oder API)
 ├── json_utils.py        # Gemeinsames, robustes Parsen von KI-Antworten
+├── storage.py           # Rezeptsammlung, Essensplan und Ernährungstagebuch
 ├── tests/               # Automatisierte Offline-Tests
 ├── requirements.txt     # Python Dependencies
 ├── requirements-cloud.txt # Schlanke Dependencies für Docker/Render
@@ -239,7 +259,7 @@ recipe_tool/
 - Einkaufsliste, Portionsumrechnung, Kategorien und Nährwertschätzung
 - Vorratsauswahl vor dem Übertragen in Apples intelligente Einkaufsliste
 - Zusammenführen mehrerer Rezepte mit Mengenaddition und optionaler Skalierung
-- Essensplan, HTML-Rezeptkarte und lokales Rezept-Dashboard
+- Persistente Rezeptsammlung, Essensplan und Kalorientracker im mobilen Dashboard
 - In-Memory-Cache mit Ablaufzeit sowie Job-Verwaltung
 
 ## Tests

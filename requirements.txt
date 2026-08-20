@@ -4,6 +4,7 @@ yt-dlp>=2025.1.1
 httpx==0.27.2
 python-dotenv==1.0.1
 pydantic==2.9.1
+psycopg[binary]>=3.2,<4
 
 # Lokal (Standard-Modus)
 openai-whisper==20240930
