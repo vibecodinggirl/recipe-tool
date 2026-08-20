@@ -1,5 +1,7 @@
 import asyncio
+import ast
 import time
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -176,3 +178,26 @@ def test_shortcut_post_accepts_shortcut_friendly_json(monkeypatch):
 def test_shortcut_endpoint_requires_a_valid_url():
     response = client.get("/shortcut", params={"url": "kein-link"})
     assert response.status_code == 422
+
+
+def test_docker_image_copies_all_local_runtime_modules():
+    project_root = Path(__file__).resolve().parents[1]
+    dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
+    copied_files = set()
+    for line in dockerfile.splitlines():
+        if line.startswith("COPY ") and line.endswith(" ./"):
+            copied_files.update(line.removeprefix("COPY ").removesuffix(" ./").split())
+
+    runtime_files = {"main.py"}
+    pending_files = ["main.py"]
+    while pending_files:
+        filename = pending_files.pop()
+        tree = ast.parse((project_root / filename).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                candidate = f"{node.module.split('.')[0]}.py"
+                if (project_root / candidate).exists() and candidate not in runtime_files:
+                    runtime_files.add(candidate)
+                    pending_files.append(candidate)
+
+    assert runtime_files <= copied_files, f"Im Docker-Image fehlen: {sorted(runtime_files - copied_files)}"
