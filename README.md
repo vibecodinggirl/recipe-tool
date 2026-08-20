@@ -154,6 +154,30 @@ Mengen und kann jedes Rezept vorab auf dieselbe Personenzahl skalieren.
 Ohne `target_servings` bleiben die ursprünglichen Mengen erhalten. Die Antwort
 enthält `items` als saubere Liste für Apple Erinnerungen.
 
+### `POST /merge-grocery-list`
+
+Vergleicht eine Rezept-Notiz mit den bereits offenen Einträgen der
+Apple-Einkaufsliste. Gleiche Zutaten werden auch bei unterschiedlichen
+Mengenangaben erkannt. Kompatible Mengen werden addiert.
+
+```json
+{
+  "recipe_text": "Für das Rezept: 3 Eier und 1 Zitrone",
+  "existing_items": ["2 Eier", "Milch"]
+}
+```
+
+Die Antwort trennt neue Einträge von Aktualisierungen:
+
+```json
+{
+  "add": ["1 Zitrone"],
+  "update": [
+    {"existing": "2 Eier", "replacement": "5 Eier"}
+  ]
+}
+```
+
 ### `POST /extract`
 
 **Request:**

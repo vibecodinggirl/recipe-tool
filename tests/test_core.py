@@ -302,3 +302,54 @@ def test_smart_grocery_list_rejects_empty_recipe_text():
 def test_smart_grocery_list_limits_recipe_count():
     response = client.post("/smart-grocery-list", json={"recipes": ["Rezept"] * 11})
     assert response.status_code == 422
+
+
+def test_normalize_grocery_updates_uses_exact_existing_titles():
+    result = main._normalize_grocery_updates(
+        [
+            {"existing": "2 eier", "replacement": "5 Eier"},
+            {"existing": "Nicht vorhanden", "replacement": "1 kg Reis"},
+            {"existing": "2 Eier", "replacement": "6 Eier"},
+            "ungültig",
+        ],
+        ["2 Eier", "Milch"],
+    )
+    assert result == [{"existing": "2 Eier", "replacement": "5 Eier"}]
+
+
+def test_merge_grocery_list_returns_add_and_update_operations(monkeypatch):
+    captured = {}
+
+    def fake_llm_query(prompt, user_input):
+        captured["user_input"] = user_input
+        return """{
+            "add": ["1 Zitrone", "  1  Zitrone "],
+            "update": [
+                {"existing": "2 eier", "replacement": "5 Eier"},
+                {"existing": "Erfundener Eintrag", "replacement": "1 kg Reis"}
+            ]
+        }"""
+
+    monkeypatch.setattr(main, "llm_query", fake_llm_query)
+    response = client.post(
+        "/merge-grocery-list",
+        json={
+            "recipe_text": "Für den Kuchen: 3 Eier und eine Zitrone",
+            "existing_items": ["2 Eier", "Milch"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "add": ["1 Zitrone"],
+        "update": [{"existing": "2 Eier", "replacement": "5 Eier"}],
+    }
+    assert "2 Eier" in captured["user_input"]
+    assert "3 Eier" in captured["user_input"]
+
+
+def test_merge_grocery_list_rejects_empty_recipe():
+    response = client.post(
+        "/merge-grocery-list",
+        json={"recipe_text": "", "existing_items": []},
+    )
+    assert response.status_code == 422

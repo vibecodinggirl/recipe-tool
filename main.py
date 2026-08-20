@@ -205,6 +205,11 @@ class SmartGroceryRequest(BaseModel):
     target_servings: Optional[int] = Field(default=None, ge=1, le=50)
 
 
+class GroceryMergeRequest(BaseModel):
+    recipe_text: str = Field(min_length=1, max_length=MAX_REQUEST_TEXT_LEN)
+    existing_items: list[str] = Field(default_factory=list, max_length=200)
+
+
 class NutritionRequest(BaseModel):
     title: str
     ingredients: list[str]
@@ -874,6 +879,67 @@ def _normalize_grocery_items(items: object) -> list[str]:
         if clean and key not in seen:
             seen.add(key)
             normalized.append(clean)
+    return normalized
+
+
+@app.post("/merge-grocery-list")
+async def merge_grocery_list(request: GroceryMergeRequest):
+    """Vergleicht ein Rezept mit Apple Erinnerungen und addiert passende Mengen."""
+    existing_items = _normalize_grocery_items(request.existing_items)
+    existing_text = "\n".join(f"- {item}" for item in existing_items) or "(leer)"
+    prompt = """Du vergleichst eine Rezept-Notiz mit einer bestehenden Einkaufsliste.
+
+Regeln:
+1. Extrahiere ausschließlich Zutaten aus der Rezept-Notiz.
+2. Erkenne gleiche Zutaten trotz Singular/Plural, Reihenfolge und unterschiedlicher Mengenangaben.
+3. Addiere kompatible Mengen und rechne Einheiten um, z.B. 500 g + 1 kg = 1,5 kg.
+4. Ändere einen bestehenden Eintrag nur, wenn die Zutat eindeutig dieselbe ist.
+5. Bei unvereinbaren oder unklaren Einheiten füge einen neuen Eintrag hinzu.
+6. Bereits ausreichende Einträge ohne sinnvoll addierbare Menge bleiben unverändert.
+
+Antworte NUR mit JSON:
+{
+  "add": ["neuer Eintrag"],
+  "update": [
+    {"existing": "exakter bisheriger Titel", "replacement": "neuer Titel mit Gesamtmenge"}
+  ]
+}
+
+Verwende bei "existing" exakt den Text aus der bestehenden Einkaufsliste.
+Sprache: Deutsch. Keine Kategorien oder Emojis."""
+    user_input = (
+        f"=== BESTEHENDE EINKAUFSLISTE ===\n{existing_text}\n\n"
+        f"=== REZEPT-NOTIZ ===\n{request.recipe_text.strip()}"
+    )
+
+    try:
+        raw = await run_in_threadpool(llm_query, prompt, user_input)
+        data = _parse_json_response(raw)
+        additions = _normalize_grocery_items(data.get("add", []))
+        updates = _normalize_grocery_updates(data.get("update", []), existing_items)
+        return {"add": additions, "update": updates}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Einkaufsliste konnte nicht abgeglichen werden: {exc}")
+
+
+def _normalize_grocery_updates(updates: object, existing_items: list[str]) -> list[dict]:
+    """Validiert Aktualisierungen gegen tatsächlich vorhandene Erinnerungstitel."""
+    if not isinstance(updates, list):
+        raise ValueError("Die KI-Antwort enthält keine gültigen Aktualisierungen.")
+
+    existing_lookup = {item.casefold(): item for item in existing_items}
+    normalized = []
+    seen = set()
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        existing = " ".join(str(update.get("existing", "")).split())
+        replacement = " ".join(str(update.get("replacement", "")).split())
+        canonical_existing = existing_lookup.get(existing.casefold())
+        if not canonical_existing or not replacement or canonical_existing.casefold() in seen:
+            continue
+        seen.add(canonical_existing.casefold())
+        normalized.append({"existing": canonical_existing, "replacement": replacement})
     return normalized
 
 

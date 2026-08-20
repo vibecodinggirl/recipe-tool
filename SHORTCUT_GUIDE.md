@@ -333,6 +333,33 @@ Der Server erledigt dabei drei Schritte in einem Aufruf:
 Die zurückgegebene Liste `items` kann anschließend mit derselben Vorratsauswahl
 und Wiederholung wie oben verarbeitet werden.
 
+### Optional: vorhandene Mengen auf der Einkaufsliste addieren
+
+Der Endpunkt `/merge-grocery-list` kann vor dem Eintragen prüfen, ob eine Zutat
+bereits mit einer anderen Menge in Apple Erinnerungen steht. Beispiel:
+
+```text
+Vorhanden: 2 Eier
+Neues Rezept: 3 Eier
+Ergebnis: 5 Eier
+```
+
+Der Kurzbefehl übergibt dazu:
+
+- `recipe_text`: den geteilten Text der Rezept-Notiz
+- `existing_items`: die Titel aller offenen Erinnerungen aus der Liste
+  **„Einkaufsliste“**
+
+Die Antwort enthält:
+
+- `add`: vollständig neue Zutaten, die als Erinnerung angelegt werden
+- `update`: bestehender Titel (`existing`) und neuer Gesamttitel (`replacement`)
+
+Für jeden `update`-Eintrag sucht der Kurzbefehl die Erinnerung mit dem exakten
+alten Titel und ändert ihren Titel auf `replacement`. Anschließend werden alle
+Einträge aus `add` neu angelegt. Dadurch entstehen keine doppelten Zutaten mit
+abweichenden Mengenangaben.
+
 ---
 
 ## Veraltete ausführliche Einkaufslisten-Variante
