@@ -251,6 +251,25 @@ class CalorieTargetRequest(BaseModel):
     calories: float = Field(gt=0, le=10000)
 
 
+class HealthTargetsRequest(BaseModel):
+    calories: float = Field(gt=0, le=10000)
+    protein_g: float = Field(gt=0, le=1000)
+    carbs_g: float = Field(gt=0, le=2000)
+    fat_g: float = Field(gt=0, le=1000)
+    fiber_g: float = Field(gt=0, le=200)
+    sugar_g: float = Field(gt=0, le=1000)
+    salt_g: float = Field(gt=0, le=100)
+
+
+class WeightRequest(BaseModel):
+    weight_kg: float = Field(gt=20, le=500)
+    measured_at: str = ""
+
+
+class WeightGoalRequest(BaseModel):
+    weight_kg: float = Field(gt=20, le=500)
+
+
 class RecipeResponse(BaseModel):
     title: str
     servings: str
@@ -1065,7 +1084,9 @@ async def estimate_nutrition(request: NutritionRequest):
         "protein_g": 25,
         "carbs_g": 55,
         "fat_g": 15,
-        "fiber_g": 5
+        "fiber_g": 5,
+        "sugar_g": 8,
+        "salt_g": 1.2
     },
     "total": {
         "calories": 1800,
@@ -1094,6 +1115,8 @@ Werte sind Schätzungen basierend auf üblichen Mengen. Sprache: Deutsch."""
             f"  🍞 Kohlenhydrate: {ps.get('carbs_g', '?')}g\n"
             f"  🧈 Fett: {ps.get('fat_g', '?')}g\n"
             f"  🌾 Ballaststoffe: {ps.get('fiber_g', '?')}g\n"
+            f"  🍬 Zucker: {ps.get('sugar_g', '?')}g\n"
+            f"  🧂 Salz: {ps.get('salt_g', '?')}g\n"
             f"\n{data.get('health_score', '')}\n{data.get('notes', '')}"
         )
         return data
@@ -1202,13 +1225,19 @@ async def get_plan_week(start: Optional[str] = None):
     return await run_in_threadpool(storage.list_plan, start_date.isoformat(), (start_date + timedelta(days=6)).isoformat())
 
 
+@app.get("/planner/week/assessment")
+async def get_plan_assessment(start: Optional[str] = None):
+    entries = await get_plan_week(start)
+    return {"entries": entries, "assessment": storage.assess_plan(entries)}
+
+
 @app.post("/tracker/log")
 async def create_food_log(request: FoodLogRequest):
     recipe = storage.get_recipe(request.recipe_id)
     if not recipe:
         raise HTTPException(status_code=404, detail="Rezept nicht gefunden.")
-    nutrition = {key: recipe.get(key) for key in ("calories", "protein_g", "carbs_g", "fat_g")}
-    if any(value is None for value in nutrition.values()):
+    nutrition = {key: recipe.get(key) for key in storage.NUTRIENT_FIELDS}
+    if any(nutrition[key] is None for key in ("calories", "protein_g", "carbs_g", "fat_g")):
         raise HTTPException(status_code=400, detail="Für dieses Rezept fehlen Nährwerte.")
     eaten_at = request.eaten_at or None
     result = await run_in_threadpool(storage.log_food, recipe["title"], request.servings, nutrition, recipe["id"], eaten_at)
@@ -1228,6 +1257,36 @@ async def get_daily_log(day: str):
 async def update_calorie_target(request: CalorieTargetRequest):
     await run_in_threadpool(storage.set_calorie_target, request.calories)
     return {"calorie_target": request.calories}
+
+
+@app.put("/tracker/targets")
+async def update_health_targets(request: HealthTargetsRequest):
+    values = request.model_dump()
+    await run_in_threadpool(storage.set_health_targets, values)
+    return {"targets": values}
+
+
+@app.get("/tracker/history")
+async def get_tracker_history(days: int = 7):
+    days = min(max(days, 1), 31)
+    end = date.today()
+    return await run_in_threadpool(storage.tracker_history, (end - timedelta(days=days - 1)).isoformat(), end.isoformat())
+
+
+@app.post("/tracker/weight")
+async def create_weight_log(request: WeightRequest):
+    return await run_in_threadpool(storage.log_weight, request.weight_kg, request.measured_at or None)
+
+
+@app.get("/tracker/weight")
+async def get_weight_log():
+    return await run_in_threadpool(storage.weight_history)
+
+
+@app.put("/tracker/weight-goal")
+async def update_weight_goal(request: WeightGoalRequest):
+    await run_in_threadpool(storage.set_weight_goal, request.weight_kg)
+    return {"goal_weight_kg": request.weight_kg}
 
 
 # ============================================================
@@ -1318,6 +1377,9 @@ async def dashboard():
     today = date.today().isoformat()
     summary = await run_in_threadpool(storage.daily_summary, today)
     week = await run_in_threadpool(storage.list_plan, today, (date.today() + timedelta(days=6)).isoformat())
+    assessment = storage.assess_plan(week)
+    weights = await run_in_threadpool(storage.weight_history, 7)
+    history = await run_in_threadpool(storage.tracker_history, (date.today() - timedelta(days=6)).isoformat(), today)
 
     recipe_cards = ""
     if not recipes:
@@ -1333,7 +1395,8 @@ async def dashboard():
             tips = html.escape(str(r.get("tips", "")))
             source_url = html.escape(str(r.get("source_url", "#")), quote=True)
             calories = r.get("calories")
-            nutrition_text = f"🔥 {calories:.0f} kcal pro Portion" if calories is not None else "Nährwerte noch nicht berechnet"
+            nutrition_text = (f"🔥 {calories:.0f} kcal · 💪 {r.get('protein_g') or 0:.0f} g Protein · "
+                              f"🌾 {r.get('fiber_g') or 0:.0f} g Ballaststoffe") if calories is not None else "Nährwerte noch nicht berechnet"
             recipe_cards += f"""
             <div class="recipe-card">
               <div onclick="this.parentElement.classList.toggle('expanded')">
@@ -1361,6 +1424,29 @@ async def dashboard():
         f'{html.escape(str(item["title"]))} ({item["servings"]:g} Portionen)</li>' for item in week
     ) or "<li>Noch nichts eingeplant.</li>"
     totals = summary["totals"]
+    targets = summary["targets"]
+    warnings_html = "".join(f"<li>{html.escape(item)}</li>" for item in assessment["warnings"])
+    assessment_class = "good" if assessment["status"] == "good" else "warning"
+    latest_weight = weights["entries"][0]["weight_kg"] if weights["entries"] else None
+    goal_weight = weights["goal_weight_kg"]
+    weight_text = f"{latest_weight:g} kg" if latest_weight is not None else "Noch kein Gewicht eingetragen"
+    goal_text = f" · Ziel {goal_weight:g} kg" if goal_weight is not None else ""
+    history_bars = "".join(
+        f'<div class="day"><span style="height:{min(100, day["totals"]["calories"] / day["targets"]["calories"] * 100):.0f}%"></span>'
+        f'<small>{day["date"][8:]}.{day["date"][5:7]}.</small></div>' for day in history
+    )
+
+    metric_specs = [
+        ("Protein", "protein_g", "g", False), ("Kohlenhydrate", "carbs_g", "g", False),
+        ("Fett", "fat_g", "g", False), ("Ballaststoffe", "fiber_g", "g", False),
+        ("Zucker", "sugar_g", "g", True), ("Salz", "salt_g", "g", True),
+    ]
+    metrics_html = "".join(
+        f'<div class="metric"><b>{label}</b><span>{totals[key]:.1f} / {targets[key]:.0f} {unit}</span>'
+        f'<div class="mini"><span class="{"limit" if is_limit and totals[key] > targets[key] else ""}" '
+        f'style="width:{min(100, totals[key] / targets[key] * 100):.0f}%"></span></div></div>'
+        for label, key, unit, is_limit in metric_specs
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="de">
@@ -1383,6 +1469,17 @@ async def dashboard():
   .progress {{ height: 12px; border-radius: 8px; background: #eee; overflow: hidden; margin: 10px 0; }}
   .progress span {{ display:block; height:100%; background:#667eea; width:{min(100, totals['calories'] / summary['target_calories'] * 100):.1f}%; }}
   .plan {{ list-style: none; }} .plan li {{ padding: 7px 0; border-bottom: 1px solid #eee; }}
+  .metrics {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:14px; }}
+  .metric {{ background:#f7f7fa; border-radius:10px; padding:10px; font-size:.82em; }}
+  .metric > span {{ display:block; color:#777; margin-top:3px; }}
+  .mini {{ height:6px; background:#e5e5ea; border-radius:5px; overflow:hidden; margin-top:7px; }}
+  .mini span {{ display:block; height:100%; background:#667eea; }} .mini span.limit {{ background:#e35d6a; }}
+  .assessment {{ padding:12px; border-radius:10px; margin-top:12px; }}
+  .assessment.good {{ background:#e8f7ed; }} .assessment.warning {{ background:#fff4df; }}
+  .assessment ul {{ padding-left:20px; margin-top:7px; }}
+  .history {{ height:110px; display:flex; gap:8px; align-items:end; margin-top:14px; }}
+  .day {{ flex:1; height:100%; display:flex; flex-direction:column; justify-content:end; align-items:center; gap:4px; }}
+  .day span {{ width:75%; min-height:2px; background:#667eea; border-radius:5px 5px 0 0; }}
   .stats {{ display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }}
   .stat {{ background: white; border-radius: 16px; padding: 16px 20px;
            flex: 1; min-width: 120px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
@@ -1420,11 +1517,22 @@ async def dashboard():
     <div><b>{totals['calories']:.0f}</b> von {summary['target_calories']:.0f} kcal · noch {summary['remaining_calories']:.0f} kcal</div>
     <div class="progress"><span></span></div>
     <small>Protein {totals['protein_g']:.0f} g · Kohlenhydrate {totals['carbs_g']:.0f} g · Fett {totals['fat_g']:.0f} g</small>
-    <div class="actions"><button class="secondary" onclick="setTarget()">Tagesziel ändern</button></div>
+    <div class="metrics">{metrics_html}</div>
+    <div class="actions"><button class="secondary" onclick="setTargets()">Ziele ändern</button></div>
+  </div>
+  <div class="panel">
+    <h2>📈 Letzte 7 Tage</h2>
+    <div class="history">{history_bars}</div>
+  </div>
+  <div class="panel">
+    <h2>⚖️ Gewicht</h2>
+    <div><b>{weight_text}</b>{goal_text}</div>
+    <div class="actions"><button onclick="logWeight()">Gewicht eintragen</button><button class="secondary" onclick="setWeightGoal()">Zielgewicht</button></div>
   </div>
   <div class="panel">
     <h2>📅 Nächste 7 Tage</h2>
     <ul class="plan">{plan_rows}</ul>
+    <div class="assessment {assessment_class}"><b>{html.escape(assessment['message'])}</b>{f'<ul>{warnings_html}</ul>' if warnings_html else ''}</div>
   </div>
   <div class="stats">
     <div class="stat"><div class="number">{len(recipes)}</div><div class="label">Rezepte</div></div>
@@ -1456,11 +1564,26 @@ async function planRecipe(id) {{
   try {{ await call('/planner/entries', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{recipe_id:id, plan_date, meal_type, servings:1}})}}); location.reload(); }}
   catch (e) {{ alert(e.message); }}
 }}
-async function setTarget() {{
-  const calories = prompt('Wie hoch ist dein tägliches Kalorienziel?', '{summary['target_calories']:.0f}');
-  if (!calories) return;
-  try {{ await call('/tracker/target', {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{calories:Number(calories)}})}}); location.reload(); }}
+function askNumber(label, current) {{ const value=prompt(label,String(current)); return value===null ? null : Number(value); }}
+async function setTargets() {{
+  const values={{}};
+  values.calories=askNumber('Kalorien pro Tag', {targets['calories']}); if(values.calories===null)return;
+  values.protein_g=askNumber('Protein in g', {targets['protein_g']}); if(values.protein_g===null)return;
+  values.carbs_g=askNumber('Kohlenhydrate in g', {targets['carbs_g']}); if(values.carbs_g===null)return;
+  values.fat_g=askNumber('Fett in g', {targets['fat_g']}); if(values.fat_g===null)return;
+  values.fiber_g=askNumber('Ballaststoffe in g', {targets['fiber_g']}); if(values.fiber_g===null)return;
+  values.sugar_g=askNumber('Maximaler Zucker in g', {targets['sugar_g']}); if(values.sugar_g===null)return;
+  values.salt_g=askNumber('Maximales Salz in g', {targets['salt_g']}); if(values.salt_g===null)return;
+  try {{ await call('/tracker/targets', {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(values)}}); location.reload(); }}
   catch (e) {{ alert(e.message); }}
+}}
+async function logWeight() {{
+  const weight_kg=askNumber('Dein heutiges Gewicht in kg', '{latest_weight or 70}'); if(weight_kg===null)return;
+  try {{ await call('/tracker/weight', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{weight_kg}})}}); location.reload(); }} catch(e){{alert(e.message);}}
+}}
+async function setWeightGoal() {{
+  const weight_kg=askNumber('Dein Zielgewicht in kg', '{goal_weight or latest_weight or 65}'); if(weight_kg===null)return;
+  try {{ await call('/tracker/weight-goal', {{method:'PUT',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{weight_kg}})}}); location.reload(); }} catch(e){{alert(e.message);}}
 }}
 </script>
 </body>

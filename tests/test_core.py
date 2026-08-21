@@ -1,5 +1,6 @@
 import asyncio
 import ast
+import sqlite3
 import time
 from datetime import date
 from pathlib import Path
@@ -406,3 +407,61 @@ def test_dashboard_combines_library_plan_and_tracker(temporary_database):
     assert "Meine Rezepte" in response.text
     assert "Heute gegessen" in response.text
     assert "Abendessen" in response.text
+
+
+def test_extended_health_targets_and_nutrients(temporary_database):
+    recipe = storage.save_recipe(sample_recipe(), {"per_serving": {
+        "calories": 500, "protein_g": 22, "carbs_g": 60, "fat_g": 15,
+        "fiber_g": 9, "sugar_g": 7, "salt_g": 1.1,
+    }})
+    storage.set_health_targets({
+        "calories": 2100, "protein_g": 120, "carbs_g": 230, "fat_g": 70,
+        "fiber_g": 35, "sugar_g": 45, "salt_g": 5,
+    })
+    storage.log_food("Pasta", 2, {key: recipe[key] for key in storage.NUTRIENT_FIELDS})
+    summary = storage.daily_summary(date.today().isoformat())
+    assert summary["totals"]["fiber_g"] == 18
+    assert summary["totals"]["sugar_g"] == 14
+    assert summary["targets"]["protein_g"] == 120
+    assert summary["targets"]["salt_g"] == 5
+
+
+def test_weight_history_and_goal(temporary_database):
+    storage.set_weight_goal(65)
+    storage.log_weight(68.4, "2026-08-21T08:00:00")
+    result = storage.weight_history()
+    assert result["goal_weight_kg"] == 65
+    assert result["entries"][0]["weight_kg"] == 68.4
+
+
+def test_plan_assessment_warns_about_missing_healthy_components():
+    assessment = storage.assess_plan([{
+        "title": "Nudeln", "servings": 1, "ingredients": '["Nudeln", "Sahne"]',
+        "protein_g": 8, "fiber_g": 2,
+    }])
+    assert assessment["status"] == "warning"
+    assert any("Protein" in warning for warning in assessment["warnings"])
+    assert any("Gemüse" in warning for warning in assessment["warnings"])
+
+
+def test_health_dashboard_sections_are_visible(temporary_database):
+    response = client.get("/dashboard")
+    assert response.status_code == 200
+    assert "Ballaststoffe" in response.text
+    assert "Letzte 7 Tage" in response.text
+    assert "Zielgewicht" in response.text
+
+
+def test_initialize_migrates_existing_database_without_losing_recipes(tmp_path, monkeypatch):
+    db_path = tmp_path / "old.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute("""CREATE TABLE recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+            servings TEXT NOT NULL DEFAULT '', ingredients TEXT NOT NULL, steps TEXT NOT NULL,
+            tips TEXT NOT NULL DEFAULT '', source_url TEXT NOT NULL DEFAULT '', calories REAL,
+            protein_g REAL, carbs_g REAL, fat_g REAL, created_at TEXT NOT NULL)""")
+        db.execute("""INSERT INTO recipes(title,ingredients,steps,created_at) VALUES('Alt','[]','[]','2026-08-21')""")
+    monkeypatch.setattr(storage, "DB_PATH", str(db_path))
+    storage.initialize()
+    recipe = storage.list_recipes()[0]
+    assert recipe["title"] == "Alt"
+    assert "fiber_g" in recipe

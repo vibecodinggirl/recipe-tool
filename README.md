@@ -92,6 +92,9 @@ Unter `/dashboard` findest du eine gemeinsame, für das Handy geeignete Übersic
 - fehlende Nährwerte lassen sich mit einem Knopfdruck schätzen,
 - Rezepte können für ein Datum eingeplant und als gegessen eingetragen werden,
 - Kalorien und Makronährstoffe werden pro Tag zusammengerechnet.
+- persönliche Ziele für Kalorien, Protein, Kohlenhydrate, Fett, Ballaststoffe, Zucker und Salz,
+- 7-Tage-Verlauf, Gewicht und Zielgewicht,
+- automatische Hinweise zu Protein, Ballaststoffen, Gemüse und Abwechslung im Wochenplan.
 
 Lokal werden die Daten automatisch in `data/recipe_tool.db` gespeichert. Auf Render
 sollte `DATABASE_URL` auf eine dauerhafte PostgreSQL-Datenbank zeigen. Für Supabase:
